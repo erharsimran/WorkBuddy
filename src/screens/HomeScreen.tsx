@@ -14,11 +14,23 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import * as ImagePicker from 'expo-image-picker';
-import { ShiftDbRow, WeeklySummary } from '../types';
-import { fetchAllShifts, replaceAllShifts, fetchWeeklyHours, recalculateWeeklyHours, updateSingleShift } from '../database/db';
+import { ShiftDbRow, WeeklySummary, CoworkerShift } from '../types';
+import {
+  fetchAllShifts,
+  replaceAllShifts,
+  fetchWeeklyHours,
+  recalculateWeeklyHours,
+  updateSingleShift,
+} from '../database/db';
 import { setupNotificationChannels, scheduleShiftAlarms } from '../services/notifications';
 import { parseScheduleFromImage } from '../services/gemini';
-import { getCurrentUser, loginOrRegister, logoutUser, getUserHourlyRate, setUserHourlyRate } from '../services/auth';
+import {
+  getCurrentUser,
+  loginOrRegister,
+  logoutUser,
+  getUserHourlyRate,
+  setUserHourlyRate,
+} from '../services/auth';
 import { downloadCalendarReminders } from '../services/calendar';
 
 type TabType = 'schedule' | 'totalhours' | 'monthly';
@@ -42,7 +54,10 @@ function formatShiftDate(dateStr: string) {
   const day = parseInt(parts[2], 10);
 
   const shiftDate = new Date(year, month, day, 0, 0, 0, 0);
-  const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const monthNames = [
+    'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+    'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+  ];
   const weekday = shiftDate.toLocaleDateString('en-US', { weekday: 'short' });
   const formattedDate = `${weekday}, ${getOrdinalSuffix(day)} ${monthNames[month]}, ${year}`;
 
@@ -176,7 +191,9 @@ export default function HomeScreen() {
   const handleSaveHourlyRate = async () => {
     const parsed = parseFloat(newRateInput);
     if (isNaN(parsed) || parsed <= 0) {
-      Platform.OS === 'web' ? window.alert('Enter a valid hourly rate.') : Alert.alert('Invalid Rate', 'Enter a valid hourly rate.');
+      Platform.OS === 'web'
+        ? window.alert('Enter a valid hourly rate.')
+        : Alert.alert('Invalid Rate', 'Enter a valid hourly rate.');
       return;
     }
     if (!currentUser) return;
@@ -216,7 +233,9 @@ export default function HomeScreen() {
 
     const parsedHours = parseFloat(editHours);
     if (isNaN(parsedHours) || parsedHours <= 0) {
-      Platform.OS === 'web' ? window.alert('Please enter valid hours.') : Alert.alert('Invalid Hours', 'Please enter valid hours.');
+      Platform.OS === 'web'
+        ? window.alert('Please enter valid hours.')
+        : Alert.alert('Invalid Hours', 'Please enter valid hours.');
       return;
     }
 
@@ -274,7 +293,10 @@ export default function HomeScreen() {
 
   const monthlyStats = useMemo(() => {
     const monthMap: Record<string, { totalHours: number; count: number; label: string }> = {};
-    const monthNames = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+    const monthNames = [
+      'January', 'February', 'March', 'April', 'May', 'June',
+      'July', 'August', 'September', 'October', 'November', 'December',
+    ];
 
     shifts.forEach((shift) => {
       const parts = shift.date.split('-');
@@ -290,12 +312,15 @@ export default function HomeScreen() {
       }
     });
 
-    return Object.keys(monthMap).sort().reverse().map((k) => ({
-      key: k,
-      label: monthMap[k].label,
-      totalHours: monthMap[k].totalHours.toFixed(1),
-      count: monthMap[k].count,
-    }));
+    return Object.keys(monthMap)
+      .sort()
+      .reverse()
+      .map((k) => ({
+        key: k,
+        label: monthMap[k].label,
+        totalHours: monthMap[k].totalHours.toFixed(1),
+        count: monthMap[k].count,
+      }));
   }, [shifts]);
 
   if (authLoading) {
@@ -340,8 +365,16 @@ export default function HomeScreen() {
                 onSubmitEditing={handleLogin}
               />
 
-              <TouchableOpacity style={styles.loginSubmitButton} onPress={handleLogin} disabled={submittingAuth}>
-                {submittingAuth ? <ActivityIndicator color="#ffffff" /> : <Text style={styles.loginSubmitButtonText}>Sign In / Continue</Text>}
+              <TouchableOpacity
+                style={styles.loginSubmitButton}
+                onPress={handleLogin}
+                disabled={submittingAuth}
+              >
+                {submittingAuth ? (
+                  <ActivityIndicator color="#ffffff" />
+                ) : (
+                  <Text style={styles.loginSubmitButtonText}>Sign In / Continue</Text>
+                )}
               </TouchableOpacity>
             </View>
           </View>
@@ -374,11 +407,17 @@ export default function HomeScreen() {
               </View>
             ) : (
               <View style={styles.actionButtonRow}>
-                <TouchableOpacity style={[styles.actionButton, styles.uploadButton]} onPress={handleUploadSchedule}>
+                <TouchableOpacity
+                  style={[styles.actionButton, styles.uploadButton]}
+                  onPress={handleUploadSchedule}
+                >
                   <Text style={styles.actionButtonText}>🖼️ Upload Roster</Text>
                 </TouchableOpacity>
 
-                <TouchableOpacity style={[styles.actionButton, styles.reminderButton]} onPress={() => downloadCalendarReminders(shifts, currentUser || 'My')}>
+                <TouchableOpacity
+                  style={[styles.actionButton, styles.reminderButton]}
+                  onPress={() => downloadCalendarReminders(shifts, currentUser || 'My')}
+                >
                   <Text style={styles.actionButtonText}>📅 Add to Calendar</Text>
                 </TouchableOpacity>
               </View>
@@ -397,22 +436,44 @@ export default function HomeScreen() {
                       <View style={styles.dateRow}>
                         <Text style={styles.dateText}>{formattedDate}</Text>
                         {relativeTag ? (
-                          <View style={[styles.tagBadge, relativeTag === 'Today' ? styles.todayBadge : relativeTag === 'Tomorrow' ? styles.tomorrowBadge : styles.relativeBadge]}>
-                            <Text style={[styles.tagText, relativeTag === 'Today' ? styles.todayText : relativeTag === 'Tomorrow' ? styles.tomorrowText : styles.relativeText]}>{relativeTag}</Text>
+                          <View
+                            style={[
+                              styles.tagBadge,
+                              relativeTag === 'Today'
+                                ? styles.todayBadge
+                                : relativeTag === 'Tomorrow'
+                                ? styles.tomorrowBadge
+                                : styles.relativeBadge,
+                            ]}
+                          >
+                            <Text
+                              style={[
+                                styles.tagText,
+                                relativeTag === 'Today'
+                                  ? styles.todayText
+                                  : relativeTag === 'Tomorrow'
+                                  ? styles.tomorrowText
+                                  : styles.relativeText,
+                              ]}
+                            >
+                              {relativeTag}
+                            </Text>
                           </View>
                         ) : null}
                       </View>
 
                       <View style={styles.iconActionsRow}>
                         <Text style={styles.hoursBadge}>{item.hours} hrs</Text>
-                        
+
                         <TouchableOpacity
                           style={styles.iconOnlyBtn}
                           onPress={() => setSelectedShift(item)}
                           hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                         >
                           <Text style={styles.actionIcon}>👥</Text>
-                          <Text style={styles.iconBadgeCount}>{item.coworkers?.length || 0}</Text>
+                          <Text style={styles.iconBadgeCount}>
+                            {item.coworkers?.length || 0}
+                          </Text>
                         </TouchableOpacity>
 
                         <TouchableOpacity
@@ -429,7 +490,11 @@ export default function HomeScreen() {
                   </View>
                 );
               }}
-              ListEmptyComponent={<Text style={styles.emptyText}>No shifts stored. Upload a roster image to populate.</Text>}
+              ListEmptyComponent={
+                <Text style={styles.emptyText}>
+                  No shifts stored. Upload a roster image to populate.
+                </Text>
+              }
               contentContainerStyle={styles.listContent}
             />
           </View>
@@ -440,7 +505,10 @@ export default function HomeScreen() {
           <ScrollView style={styles.tabContentContainer} contentContainerStyle={styles.listContent}>
             <View style={styles.payHeaderRow}>
               <Text style={styles.subtitle}>Pay & Hours Analysis</Text>
-              <TouchableOpacity style={styles.editRateBtn} onPress={() => setIsRateModalOpen(true)}>
+              <TouchableOpacity
+                style={styles.editRateBtn}
+                onPress={() => setIsRateModalOpen(true)}
+              >
                 <Text style={styles.editRateBtnText}>⚙️ Base: ${hourlyRate.toFixed(2)}/hr</Text>
               </TouchableOpacity>
             </View>
@@ -488,7 +556,9 @@ export default function HomeScreen() {
                   <View style={styles.payRowDivider} />
 
                   <View style={styles.payDetailsRow}>
-                    <Text style={styles.payDetailLabel}>Gross Earnings (@ ${w.hourlyRate.toFixed(2)}/hr):</Text>
+                    <Text style={styles.payDetailLabel}>
+                      Gross Earnings (@ ${w.hourlyRate.toFixed(2)}/hr):
+                    </Text>
                     <Text style={styles.payDetailValue}>${w.grossPay.toFixed(2)}</Text>
                   </View>
 
@@ -529,6 +599,50 @@ export default function HomeScreen() {
           </ScrollView>
         )}
 
+        {/* Coworkers Modal with Shift Timings */}
+        <Modal visible={!!selectedShift} animationType="fade" transparent={true}>
+          <View style={styles.modalOverlay}>
+            <View style={styles.modalContent}>
+              <Text style={styles.modalTitle}>Daily Coworker Schedule</Text>
+              <Text style={styles.modalSub}>
+                {selectedShift ? formatShiftDate(selectedShift.date).formattedDate : ''}
+              </Text>
+
+              <ScrollView style={{ maxHeight: 320, marginVertical: 14 }}>
+                {selectedShift?.coworkers && selectedShift.coworkers.length > 0 ? (
+                  selectedShift.coworkers.map((c: CoworkerShift | string, idx: number) => {
+                    const isObject = typeof c === 'object' && c !== null;
+                    const name = isObject ? c.name : c;
+                    const timeRange =
+                      isObject && c.startTime && c.endTime
+                        ? `${c.startTime} - ${c.endTime}`
+                        : null;
+
+                    return (
+                      <View key={idx} style={styles.coworkerRow}>
+                        <Text style={styles.coworkerNameText}>• {name}</Text>
+                        {timeRange ? (
+                          <View style={styles.coworkerTimeBadge}>
+                            <Text style={styles.coworkerTimeText}>⏰ {timeRange}</Text>
+                          </View>
+                        ) : null}
+                      </View>
+                    );
+                  })
+                ) : (
+                  <Text style={styles.noCoworkersText}>
+                    No other coworkers scheduled on this date.
+                  </Text>
+                )}
+              </ScrollView>
+
+              <TouchableOpacity style={styles.closeBtn} onPress={() => setSelectedShift(null)}>
+                <Text style={styles.closeBtnText}>Close</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </Modal>
+
         {/* Shift Editor Modal */}
         <Modal visible={!!editingShift} animationType="fade" transparent={true}>
           <View style={styles.modalOverlay}>
@@ -564,10 +678,16 @@ export default function HomeScreen() {
               />
 
               <View style={{ flexDirection: 'row', gap: 10, marginTop: 16 }}>
-                <TouchableOpacity style={[styles.closeBtn, { flex: 1, backgroundColor: '#94a3b8' }]} onPress={() => setEditingShift(null)}>
+                <TouchableOpacity
+                  style={[styles.closeBtn, { flex: 1, backgroundColor: '#94a3b8' }]}
+                  onPress={() => setEditingShift(null)}
+                >
                   <Text style={styles.closeBtnText}>Cancel</Text>
                 </TouchableOpacity>
-                <TouchableOpacity style={[styles.closeBtn, { flex: 1, backgroundColor: '#2563eb' }]} onPress={handleSaveShiftEdit}>
+                <TouchableOpacity
+                  style={[styles.closeBtn, { flex: 1, backgroundColor: '#2563eb' }]}
+                  onPress={handleSaveShiftEdit}
+                >
                   <Text style={styles.closeBtnText}>Save Shift</Text>
                 </TouchableOpacity>
               </View>
@@ -580,7 +700,9 @@ export default function HomeScreen() {
           <View style={styles.modalOverlay}>
             <View style={styles.modalContent}>
               <Text style={styles.modalTitle}>Update Hourly Rate</Text>
-              <Text style={styles.modalSub}>Adjust base hourly wage to recalculate all pay projections.</Text>
+              <Text style={styles.modalSub}>
+                Adjust base hourly wage to recalculate all pay projections.
+              </Text>
 
               <TextInput
                 style={[styles.textInput, { marginVertical: 14 }]}
@@ -591,55 +713,54 @@ export default function HomeScreen() {
               />
 
               <View style={{ flexDirection: 'row', gap: 10 }}>
-                <TouchableOpacity style={[styles.closeBtn, { flex: 1, backgroundColor: '#94a3b8' }]} onPress={() => setIsRateModalOpen(false)}>
+                <TouchableOpacity
+                  style={[styles.closeBtn, { flex: 1, backgroundColor: '#94a3b8' }]}
+                  onPress={() => setIsRateModalOpen(false)}
+                >
                   <Text style={styles.closeBtnText}>Cancel</Text>
                 </TouchableOpacity>
-                <TouchableOpacity style={[styles.closeBtn, { flex: 1, backgroundColor: '#2563eb' }]} onPress={handleSaveHourlyRate}>
+                <TouchableOpacity
+                  style={[styles.closeBtn, { flex: 1, backgroundColor: '#2563eb' }]}
+                  onPress={handleSaveHourlyRate}
+                >
                   <Text style={styles.closeBtnText}>Save</Text>
                 </TouchableOpacity>
               </View>
             </View>
           </View>
         </Modal>
-
-        {/* Coworkers Modal */}
-        <Modal visible={!!selectedShift} animationType="fade" transparent={true}>
-          <View style={styles.modalOverlay}>
-            <View style={styles.modalContent}>
-              <Text style={styles.modalTitle}>Full-Shift Coworkers</Text>
-              <Text style={styles.modalSub}>{selectedShift ? formatShiftDate(selectedShift.date).formattedDate : ''} ({selectedShift?.start_time} - {selectedShift?.end_time})</Text>
-              <ScrollView style={{ maxHeight: 250, marginVertical: 12 }}>
-                {selectedShift?.coworkers && selectedShift.coworkers.length > 0 ? (
-                  selectedShift.coworkers.map((name, idx) => (
-                    <Text key={idx} style={styles.coworkerName}>• {name}</Text>
-                  ))
-                ) : (
-                  <Text style={styles.noCoworkersText}>No coworkers working this full shift window.</Text>
-                )}
-              </ScrollView>
-              <TouchableOpacity style={styles.closeBtn} onPress={() => setSelectedShift(null)}>
-                <Text style={styles.closeBtnText}>Close</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </Modal>
       </View>
 
-      {/* Bottom Navigation */}
+      {/* Persistent Bottom Tab Bar */}
       <View style={styles.bottomTabBar}>
-        <TouchableOpacity style={[styles.tabItem, activeTab === 'schedule' && styles.activeTabItem]} onPress={() => setActiveTab('schedule')}>
+        <TouchableOpacity
+          style={[styles.tabItem, activeTab === 'schedule' && styles.activeTabItem]}
+          onPress={() => setActiveTab('schedule')}
+        >
           <Text style={styles.tabIcon}>📅</Text>
-          <Text style={[styles.tabLabel, activeTab === 'schedule' && styles.activeTabLabel]}>Schedule</Text>
+          <Text style={[styles.tabLabel, activeTab === 'schedule' && styles.activeTabLabel]}>
+            Schedule
+          </Text>
         </TouchableOpacity>
 
-        <TouchableOpacity style={[styles.tabItem, activeTab === 'totalhours' && styles.activeTabItem]} onPress={() => setActiveTab('totalhours')}>
+        <TouchableOpacity
+          style={[styles.tabItem, activeTab === 'totalhours' && styles.activeTabItem]}
+          onPress={() => setActiveTab('totalhours')}
+        >
           <Text style={styles.tabIcon}>⏱️</Text>
-          <Text style={[styles.tabLabel, activeTab === 'totalhours' && styles.activeTabLabel]}>Total Hours</Text>
+          <Text style={[styles.tabLabel, activeTab === 'totalhours' && styles.activeTabLabel]}>
+            Total Hours
+          </Text>
         </TouchableOpacity>
 
-        <TouchableOpacity style={[styles.tabItem, activeTab === 'monthly' && styles.activeTabItem]} onPress={() => setActiveTab('monthly')}>
+        <TouchableOpacity
+          style={[styles.tabItem, activeTab === 'monthly' && styles.activeTabItem]}
+          onPress={() => setActiveTab('monthly')}
+        >
           <Text style={styles.tabIcon}>📊</Text>
-          <Text style={[styles.tabLabel, activeTab === 'monthly' && styles.activeTabLabel]}>Monthly</Text>
+          <Text style={[styles.tabLabel, activeTab === 'monthly' && styles.activeTabLabel]}>
+            Monthly
+          </Text>
         </TouchableOpacity>
       </View>
     </SafeAreaView>
@@ -652,20 +773,57 @@ const styles = StyleSheet.create({
   container: { flex: 1, paddingHorizontal: 20, paddingTop: 16 },
   tabContentContainer: { flex: 1 },
 
+  // Auth / Login
   loginContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 20 },
   loginBox: { width: '100%', maxWidth: 400 },
-  authCard: { backgroundColor: '#ffffff', padding: 24, borderRadius: 18, borderWidth: 1, borderColor: '#e2e8f0', marginTop: 18 },
+  authCard: {
+    backgroundColor: '#ffffff',
+    padding: 24,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    marginTop: 18,
+  },
   inputLabel: { fontSize: 14, fontWeight: '700', color: '#334155', marginBottom: 6, marginTop: 12 },
-  textInput: { borderWidth: 1, borderColor: '#cbd5e1', borderRadius: 10, paddingHorizontal: 14, paddingVertical: 14, fontSize: 16, backgroundColor: '#f8fafc', color: '#0f172a' },
-  loginSubmitButton: { backgroundColor: '#2563eb', borderRadius: 12, paddingVertical: 16, alignItems: 'center', justifyContent: 'center', marginTop: 22, minHeight: 52 },
+  textInput: {
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+    borderRadius: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 14,
+    fontSize: 16,
+    backgroundColor: '#f8fafc',
+    color: '#0f172a',
+  },
+  loginSubmitButton: {
+    backgroundColor: '#2563eb',
+    borderRadius: 12,
+    paddingVertical: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 22,
+    minHeight: 52,
+  },
   loginSubmitButtonText: { color: '#ffffff', fontSize: 16, fontWeight: '700' },
 
-  headerRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12 },
+  // Header
+  headerRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    marginBottom: 12,
+  },
   title: { fontSize: 26, fontWeight: '800', color: '#0f172a' },
   headerSubtitle: { fontSize: 13, color: '#64748b', marginTop: 2 },
-  logoutBtn: { backgroundColor: '#fee2e2', paddingVertical: 8, paddingHorizontal: 14, borderRadius: 8 },
+  logoutBtn: {
+    backgroundColor: '#fee2e2',
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    borderRadius: 8,
+  },
   logoutBtnText: { color: '#ef4444', fontWeight: '700', fontSize: 13 },
 
+  // Action Buttons
   actionButtonRow: { flexDirection: 'row', gap: 10, marginTop: 4 },
   actionButton: { paddingVertical: 14, borderRadius: 12, alignItems: 'center' },
   uploadButton: { flex: 1, backgroundColor: '#2563eb' },
@@ -675,6 +833,7 @@ const styles = StyleSheet.create({
   loadingText: { marginTop: 8, color: '#64748b', fontSize: 14, fontWeight: '600' },
   subtitle: { fontSize: 18, fontWeight: '700', color: '#1e293b', marginTop: 16, marginBottom: 12 },
 
+  // Shift Cards
   card: {
     backgroundColor: '#ffffff',
     paddingHorizontal: 16,
@@ -755,48 +914,151 @@ const styles = StyleSheet.create({
 
   modalFieldLabel: { fontSize: 13, fontWeight: '700', color: '#475569', marginTop: 12, marginBottom: 4 },
 
+  // Pay & Total Hours View
   payHeaderRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  editRateBtn: { backgroundColor: '#f1f5f9', paddingVertical: 6, paddingHorizontal: 12, borderRadius: 8, borderWidth: 1, borderColor: '#cbd5e1' },
+  editRateBtn: {
+    backgroundColor: '#f1f5f9',
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+  },
   editRateBtnText: { color: '#0f172a', fontWeight: '700', fontSize: 13 },
-  summaryCard: { backgroundColor: '#0f172a', padding: 24, borderRadius: 16, alignItems: 'center', marginBottom: 16 },
-  summaryLabel: { color: '#94a3b8', fontSize: 13, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.5 },
+  summaryCard: {
+    backgroundColor: '#0f172a',
+    padding: 24,
+    borderRadius: 16,
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  summaryLabel: {
+    color: '#94a3b8',
+    fontSize: 13,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
   summaryNumber: { color: '#38bdf8', fontSize: 40, fontWeight: '900', marginTop: 6 },
   summaryRateText: { fontSize: 13, fontWeight: '600', color: '#cbd5e1', marginTop: 6 },
   statsGrid: { flexDirection: 'row', gap: 12, marginBottom: 8 },
-  statBox: { flex: 1, backgroundColor: '#ffffff', padding: 16, borderRadius: 14, borderWidth: 1, borderColor: '#e2e8f0', alignItems: 'center' },
+  statBox: {
+    flex: 1,
+    backgroundColor: '#ffffff',
+    padding: 16,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    alignItems: 'center',
+  },
   statNumber: { fontSize: 20, fontWeight: '800', color: '#0f172a' },
   statLabel: { fontSize: 12, color: '#64748b', marginTop: 4, fontWeight: '600' },
 
-  payCard: { backgroundColor: '#ffffff', padding: 16, borderRadius: 14, marginBottom: 12, borderWidth: 1, borderColor: '#e2e8f0' },
+  payCard: {
+    backgroundColor: '#ffffff',
+    padding: 16,
+    borderRadius: 14,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+  },
   payCardHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' },
   payWeekTitle: { fontSize: 16, fontWeight: '800', color: '#0f172a' },
   payDateRangeText: { fontSize: 12, color: '#64748b', marginTop: 2, fontWeight: '500' },
   payDepositText: { fontSize: 12, color: '#059669', marginTop: 2, fontWeight: '700' },
-  hoursBadgeContainer: { backgroundColor: '#eff6ff', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 8 },
+  hoursBadgeContainer: {
+    backgroundColor: '#eff6ff',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 8,
+  },
   payHoursBadge: { color: '#2563eb', fontWeight: '800', fontSize: 13 },
   payRowDivider: { height: 1, backgroundColor: '#f1f5f9', marginVertical: 12 },
-  payDetailsRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 },
+  payDetailsRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 6,
+  },
   payDetailLabel: { fontSize: 13, color: '#475569', fontWeight: '500' },
   payDetailValue: { fontSize: 13, color: '#0f172a', fontWeight: '700' },
   payDetailDeduct: { fontSize: 13, color: '#ef4444', fontWeight: '700' },
   payDetailNetLabel: { fontSize: 14, color: '#0f172a', fontWeight: '800' },
   payDetailNetValue: { fontSize: 15, color: '#059669', fontWeight: '900' },
 
-  monthlyCard: { backgroundColor: '#ffffff', padding: 18, borderRadius: 14, marginBottom: 12, borderWidth: 1, borderColor: '#e2e8f0', flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  // Monthly Tab
+  monthlyCard: {
+    backgroundColor: '#ffffff',
+    padding: 18,
+    borderRadius: 14,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
   monthTitle: { fontSize: 16, fontWeight: '700', color: '#0f172a' },
   monthSub: { fontSize: 13, color: '#64748b', marginTop: 2 },
-  monthBadge: { backgroundColor: '#eff6ff', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 8 },
+  monthBadge: {
+    backgroundColor: '#eff6ff',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 8,
+  },
   monthHoursText: { color: '#2563eb', fontWeight: '800', fontSize: 14 },
 
-  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', padding: 20 },
+  // Modals & Coworker Schedule Rows
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    padding: 20,
+  },
   modalContent: { backgroundColor: '#fff', borderRadius: 16, padding: 20 },
   modalTitle: { fontSize: 18, fontWeight: '800', color: '#0f172a' },
   modalSub: { fontSize: 13, color: '#64748b', marginTop: 2 },
-  coworkerName: { fontSize: 15, color: '#1e293b', fontWeight: '500', paddingVertical: 3 },
-  noCoworkersText: { fontSize: 14, color: '#94a3b8', fontStyle: 'italic', paddingVertical: 8 },
-  closeBtn: { backgroundColor: '#0f172a', paddingVertical: 12, borderRadius: 8, alignItems: 'center', marginTop: 10 },
+  coworkerRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f1f5f9',
+  },
+  coworkerNameText: {
+    fontSize: 15,
+    color: '#0f172a',
+    fontWeight: '600',
+    flex: 1,
+  },
+  coworkerTimeBadge: {
+    backgroundColor: '#eff6ff',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 6,
+  },
+  coworkerTimeText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#2563eb',
+  },
+  noCoworkersText: {
+    fontSize: 14,
+    color: '#94a3b8',
+    fontStyle: 'italic',
+    paddingVertical: 8,
+  },
+  closeBtn: {
+    backgroundColor: '#0f172a',
+    paddingVertical: 12,
+    borderRadius: 8,
+    alignItems: 'center',
+    marginTop: 10,
+  },
   closeBtnText: { color: '#fff', fontWeight: '700' },
 
+  // Bottom Navigation Bar
   bottomTabBar: {
     flexDirection: 'row',
     backgroundColor: '#ffffff',

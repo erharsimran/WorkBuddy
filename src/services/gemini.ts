@@ -1,48 +1,76 @@
-import { GoogleGenAI } from '@google/genai';
+import { GoogleGenAI, Type } from '@google/genai';
 import { Shift } from '../types';
 
-const apiKey = process.env.EXPO_PUBLIC_GEMINI_API_KEY;
-const ai = new GoogleGenAI({ apiKey: apiKey || '' });
+const ai = new GoogleGenAI({
+    apiKey: process.env.EXPO_PUBLIC_GEMINI_API_KEY || '',
+});
 
 export async function parseScheduleFromImage(
-    base64Image: string,
-    employeeName: string = "Harry"
+    imageBase64: string,
+    targetEmployeeName: string
 ): Promise<Shift[]> {
-    if (!apiKey) {
-        throw new Error("Missing EXPO_PUBLIC_GEMINI_API_KEY in .env file.");
-    }
-
-    const prompt = `Analyze this weekly roster image for employee "${employeeName}".
-1. Extract every shift where "${employeeName}" is scheduled (exclude OFF days).
-2. For each shift, find all coworkers who work "${employeeName}"'s ENTIRE shift (meaning their scheduled startTime <= "${employeeName}"'s startTime AND their endTime >= "${employeeName}"'s endTime).
-3. Exclude "${employeeName}" from the coworkers list.
-
-Return ONLY a valid JSON array matching this format:
-[
-  {
-    "date": "YYYY-MM-DD",
-    "startTime": "HH:mm",
-    "endTime": "HH:mm",
-    "hours": 6.0,
-    "coworkers": ["Name1", "Name2"]
-  }
-]
-Ensure 24-hour time formatting (e.g. "15:00" instead of "3:00 PM"). Do not include markdown code block ticks.`;
+    const prompt = `
+    Analyze this work roster image.
+    Find all scheduled shifts for the employee named "${targetEmployeeName}".
+    
+    For each shift of "${targetEmployeeName}":
+    1. Extract the shift date in "YYYY-MM-DD" format.
+    2. Extract start_time and end_time in 24-hour "HH:mm" format (e.g., "12:00", "21:30").
+    3. Calculate or extract total hours worked as a decimal number.
+    4. List ALL coworkers scheduled on that SAME date. For each coworker, include their name and their exact scheduled shift startTime and endTime (e.g. name: "Neeru D.", startTime: "12:00", endTime: "21:30"). Exclude "${targetEmployeeName}".
+  `;
 
     const response = await ai.models.generateContent({
-        model: 'gemini-3.6-flash',
+        model: 'gemini-2.5-flash',
         contents: [
             {
                 role: 'user',
                 parts: [
                     { text: prompt },
-                    { inlineData: { mimeType: 'image/jpeg', data: base64Image } }
-                ]
-            }
-        ]
+                    {
+                        inlineData: {
+                            mimeType: 'image/jpeg',
+                            data: imageBase64,
+                        },
+                    },
+                ],
+            },
+        ],
+        config: {
+            responseMimeType: 'application/json',
+            responseSchema: {
+                type: Type.ARRAY,
+                items: {
+                    type: Type.OBJECT,
+                    properties: {
+                        date: { type: Type.STRING, description: 'YYYY-MM-DD' },
+                        startTime: { type: Type.STRING, description: 'HH:mm (24hr)' },
+                        endTime: { type: Type.STRING, description: 'HH:mm (24hr)' },
+                        hours: { type: Type.NUMBER, description: 'Total shift hours' },
+                        coworkers: {
+                            type: Type.ARRAY,
+                            description: 'All coworkers working on the same date with their timings',
+                            items: {
+                                type: Type.OBJECT,
+                                properties: {
+                                    name: { type: Type.STRING },
+                                    startTime: { type: Type.STRING, description: 'HH:mm' },
+                                    endTime: { type: Type.STRING, description: 'HH:mm' },
+                                },
+                                required: ['name', 'startTime', 'endTime'],
+                            },
+                        },
+                    },
+                    required: ['date', 'startTime', 'endTime', 'hours'],
+                },
+            },
+        },
     });
 
-    const rawText = response.text ?? '[]';
-    const cleanedJson = rawText.replace(/```json|```/g, '').trim();
-    return JSON.parse(cleanedJson) as Shift[];
+    if (!response.text) {
+        throw new Error('No schedule data found from the model.');
+    }
+
+    const parsed = JSON.parse(response.text);
+    return parsed as Shift[];
 }

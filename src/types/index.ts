@@ -1,10 +1,15 @@
+export interface CoworkerShift {
+    name: string;
+    startTime: string; // e.g. "12:00"
+    endTime: string;   // e.g. "21:30"
+}
+
 export interface Shift {
-    id?: number;
-    date: string;       // Format: YYYY-MM-DD
-    startTime: string;  // Format: HH:mm (24h)
-    endTime: string;    // Format: HH:mm (24h)
+    date: string;
+    startTime: string;
+    endTime: string;
     hours: number;
-    coworkers?: string[];
+    coworkers?: CoworkerShift[];
 }
 
 export interface ShiftDbRow {
@@ -13,20 +18,21 @@ export interface ShiftDbRow {
     start_time: string;
     end_time: string;
     hours: number;
-    coworkers?: string[];
+    coworkers?: CoworkerShift[];
 }
+
 export interface WeeklySummary {
-    weekKey: string;           // e.g., "2026-W33"
-    startDate: string;         // Monday (YYYY-MM-DD)
-    endDate: string;           // Sunday (YYYY-MM-DD)
-    payDate: string;           // Following Thursday (YYYY-MM-DD)
-    totalHours: number;        // Total scheduled hours
-    shiftCount: number;        // Number of shifts
-    hourlyRate: number;        // $18.10
-    grossPay: number;          // totalHours * 18.10
-    estimatedTax: number;      // Federal/Provincial Tax (~9.24%)
-    estimatedCpp: number;      // CPP (~5.33%)
-    estimatedEi: number;       // EI (~1.63%)
-    totalDeductions: number;   // Tax + CPP + EI (~16.2%)
-    estimatedNetPay: number;   // Take-home pay (~83.8%)
+    weekKey: string;
+    startDate: string;
+    endDate: string;
+    payDate: string;
+    totalHours: number;
+    shiftCount: number;
+    hourlyRate: number;
+    grossPay: number;
+    estimatedTax: number;
+    estimatedCpp: number;
+    estimatedEi: number;
+    totalDeductions: number;
+    estimatedNetPay: number;
 }
