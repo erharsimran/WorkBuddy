@@ -10,7 +10,7 @@ export async function parseScheduleFromImage(
         throw new Error('Missing Gemini API Key. Check EXPO_PUBLIC_GEMINI_API_KEY in .env.');
     }
 
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key=${apiKey}`;
 
     const prompt = `
     Analyze this work roster image.
@@ -51,17 +51,17 @@ export async function parseScheduleFromImage(
                 ],
             },
         ],
-      generationConfig: {
-          responseMimeType: 'application/json',
-      },
+        generationConfig: {
+            responseMimeType: 'application/json',
+        },
     };
 
     const response = await fetch(url, {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(body),
+        },
+        body: JSON.stringify(body),
   });
 
     if (!response.ok) {
@@ -78,6 +78,4 @@ export async function parseScheduleFromImage(
     }
 
     return JSON.parse(rawText) as Shift[];
-
-
 }
