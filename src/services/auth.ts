@@ -59,3 +59,23 @@ export async function logoutUser(): Promise<void> {
         console.error('Error in logoutUser:', e);
     }
 }
+const DEFAULT_HOURLY_RATE = Number(process.env.EXPO_PUBLIC_HOURLY_RATE) || 18.10;
+
+export async function getUserHourlyRate(username: string): Promise<number> {
+    if (typeof window !== 'undefined' && window.localStorage) {
+        const key = `WORKBUDDY_HOURLY_RATE_${username.toLowerCase()}`;
+        const savedRate = window.localStorage.getItem(key);
+        if (savedRate) {
+            const parsed = parseFloat(savedRate);
+            if (!isNaN(parsed) && parsed > 0) return parsed;
+        }
+    }
+    return DEFAULT_HOURLY_RATE;
+}
+
+export async function setUserHourlyRate(username: string, rate: number): Promise<void> {
+    if (typeof window !== 'undefined' && window.localStorage) {
+        const key = `WORKBUDDY_HOURLY_RATE_${username.toLowerCase()}`;
+        window.localStorage.setItem(key, rate.toFixed(2));
+    }
+}

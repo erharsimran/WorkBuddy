@@ -1,8 +1,7 @@
 import * as SQLite from 'expo-sqlite';
 import { Shift, ShiftDbRow, WeeklySummary } from '../types';
+import { getCurrentUser, getUserHourlyRate } from '../services/auth';
 
-// Environment variable rates with fallback defaults
-const HOURLY_RATE = Number(process.env.EXPO_PUBLIC_HOURLY_RATE) || 18.10;
 const TAX_RATE = Number(process.env.EXPO_PUBLIC_TAX_RATE) || 0.0924;
 const CPP_RATE = Number(process.env.EXPO_PUBLIC_CPP_RATE) || 0.0533;
 const EI_RATE = Number(process.env.EXPO_PUBLIC_EI_RATE) || 0.0163;
@@ -16,19 +15,15 @@ function getWeekDetails(dateStr: string) {
 
     const dayOfWeek = target.getDay() === 0 ? 7 : target.getDay();
 
-    // Monday of shift week
     const monday = new Date(target);
     monday.setDate(target.getDate() - (dayOfWeek - 1));
 
-    // Sunday of shift week
     const sunday = new Date(monday);
     sunday.setDate(monday.getDate() + 6);
 
-    // Thursday pay deposit date (following week)
     const payDate = new Date(monday);
     payDate.setDate(monday.getDate() + 10);
 
-    // ISO Week numbering
     const d = new Date(Date.UTC(target.getFullYear(), target.getMonth(), target.getDate()));
     const dayNum = d.getUTCDay() || 7;
     d.setUTCDate(d.getUTCDate() + 4 - dayNum);
@@ -43,8 +38,8 @@ function getWeekDetails(dateStr: string) {
     };
 }
 
-function calculateWeeklyPay(hours: number) {
-    const gross = Number((hours * HOURLY_RATE).toFixed(2));
+function calculateWeeklyPay(hours: number, hourlyRate: number) {
+    const gross = Number((hours * hourlyRate).toFixed(2));
     const tax = Number((gross * TAX_RATE).toFixed(2));
     const cpp = Number((gross * CPP_RATE).toFixed(2));
     const ei = Number((gross * EI_RATE).toFixed(2));
@@ -61,7 +56,7 @@ function calculateWeeklyPay(hours: number) {
     };
 }
 
-function aggregateShiftsByWeek(shifts: ShiftDbRow[]): WeeklySummary[] {
+function aggregateShiftsByWeek(shifts: ShiftDbRow[], hourlyRate: number): WeeklySummary[] {
     const weekMap: Record<
         string,
         {
@@ -96,11 +91,11 @@ function aggregateShiftsByWeek(shifts: ShiftDbRow[]): WeeklySummary[] {
     return Object.values(weekMap)
         .map((w) => {
             const roundedHours = Number(w.totalHours.toFixed(2));
-            const pay = calculateWeeklyPay(roundedHours);
+            const pay = calculateWeeklyPay(roundedHours, hourlyRate);
             return {
                 ...w,
                 totalHours: roundedHours,
-                hourlyRate: HOURLY_RATE,
+                hourlyRate,
                 ...pay,
             };
         })
@@ -137,8 +132,6 @@ async function getDatabase() {
     return db;
 }
 
-// --- SHIFTS TABLE ---
-
 export async function fetchAllShifts(): Promise<ShiftDbRow[]> {
     try {
         const db = await getDatabase();
@@ -163,6 +156,9 @@ export async function fetchAllShifts(): Promise<ShiftDbRow[]> {
 
 export async function replaceAllShifts(shifts: Shift[]): Promise<void> {
     const db = await getDatabase();
+    const user = (await getCurrentUser()) || 'user';
+    const rate = await getUserHourlyRate(user);
+
     const formatted: ShiftDbRow[] = shifts.map((s, idx) => ({
         id: idx + 1,
         date: s.date,
@@ -172,7 +168,7 @@ export async function replaceAllShifts(shifts: Shift[]): Promise<void> {
         coworkers: s.coworkers || [],
     }));
 
-    const weeklySummaries = aggregateShiftsByWeek(formatted);
+    const weeklySummaries = aggregateShiftsByWeek(formatted, rate);
 
     await db.withTransactionAsync(async () => {
         await db.execAsync('DELETE FROM shifts;');
@@ -189,6 +185,111 @@ export async function replaceAllShifts(shifts: Shift[]): Promise<void> {
             );
         }
 
+        await db.execAsync('DELETE FROM weekly_hours;');
+        for (const w of weeklySummaries) {
+            await db.runAsync(
+        `INSERT INTO weekly_hours (
+          weekKey, startDate, endDate, payDate, totalHours, shiftCount,
+          hourlyRate, grossPay, estimatedTax, estimatedCpp, estimatedEi,
+          totalDeductions, estimatedNetPay
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
+                [
+                    w.weekKey,
+                    w.startDate,
+                    w.endDate,
+                    w.payDate,
+                    w.totalHours,
+                    w.shiftCount,
+                    w.hourlyRate,
+                    w.grossPay,
+                    w.estimatedTax,
+                    w.estimatedCpp,
+                    w.estimatedEi,
+                    w.totalDeductions,
+                    w.estimatedNetPay,
+                ]
+            );
+        }
+    });
+}
+
+export async function fetchWeeklyHours(): Promise<WeeklySummary[]> {
+    try {
+        const db = await getDatabase();
+        return await db.getAllAsync<WeeklySummary>(
+            'SELECT * FROM weekly_hours ORDER BY weekKey DESC;'
+        );
+    } catch (e) {
+        console.error('Failed to fetch weekly records from SQLite:', e);
+        return [];
+    }
+}
+
+export async function saveWeeklyHours(weeklyRecords: WeeklySummary[]): Promise<void> {
+    try {
+        const db = await getDatabase();
+        await db.withTransactionAsync(async () => {
+            await db.execAsync('DELETE FROM weekly_hours;');
+            for (const w of weeklyRecords) {
+                await db.runAsync(
+          `INSERT INTO weekly_hours (
+            weekKey, startDate, endDate, payDate, totalHours, shiftCount,
+            hourlyRate, grossPay, estimatedTax, estimatedCpp, estimatedEi,
+            totalDeductions, estimatedNetPay
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
+                    [
+                        w.weekKey,
+                        w.startDate,
+                        w.endDate,
+                        w.payDate,
+                        w.totalHours,
+                        w.shiftCount,
+                        w.hourlyRate,
+                        w.grossPay,
+                        w.estimatedTax,
+                        w.estimatedCpp,
+                        w.estimatedEi,
+                        w.totalDeductions,
+                        w.estimatedNetPay,
+                    ]
+                );
+            }
+    });
+    } catch (e) {
+        console.error('Failed to update weekly records in SQLite:', e);
+    }
+}
+
+export async function recalculateWeeklyHours(): Promise<WeeklySummary[]> {
+    const user = (await getCurrentUser()) || 'user';
+    const rate = await getUserHourlyRate(user);
+    const shifts = await fetchAllShifts();
+    const recalculated = aggregateShiftsByWeek(shifts, rate);
+    await saveWeeklyHours(recalculated);
+    return recalculated;
+}
+
+export async function updateSingleShift(updatedShift: ShiftDbRow): Promise<void> {
+    const db = await getDatabase();
+    const user = (await getCurrentUser()) || 'user';
+    const rate = await getUserHourlyRate(user);
+
+    await db.runAsync(
+        'UPDATE shifts SET date = ?, start_time = ?, end_time = ?, hours = ?, coworkers = ? WHERE id = ?;',
+        [
+            updatedShift.date,
+            updatedShift.start_time,
+            updatedShift.end_time,
+            updatedShift.hours,
+            JSON.stringify(updatedShift.coworkers || []),
+            updatedShift.id,
+        ]
+    );
+
+    const refreshedShifts = await fetchAllShifts();
+    const weeklySummaries = aggregateShiftsByWeek(refreshedShifts, rate);
+
+    await db.withTransactionAsync(async () => {
         await db.execAsync('DELETE FROM weekly_hours;');
         for (const w of weeklySummaries) {
             await db.runAsync(
@@ -215,53 +316,4 @@ export async function replaceAllShifts(shifts: Shift[]): Promise<void> {
             );
         }
     });
-}
-
-// --- WEEKLY HOURS TABLE ---
-
-export async function fetchWeeklyHours(): Promise<WeeklySummary[]> {
-    try {
-        const db = await getDatabase();
-        return await db.getAllAsync<WeeklySummary>(
-            'SELECT * FROM weekly_hours ORDER BY weekKey DESC;'
-        );
-    } catch (e) {
-        console.error('Failed to fetch weekly records from SQLite:', e);
-        return [];
-    }
-}
-
-export async function saveWeeklyHours(weeklyRecords: WeeklySummary[]): Promise<void> {
-    try {
-        const db = await getDatabase();
-        await db.withTransactionAsync(async () => {
-            await db.execAsync('DELETE FROM weekly_hours;');
-            for (const w of weeklyRecords) {
-                await db.runAsync(
-                    `INSERT INTO weekly_hours (
-            weekKey, startDate, endDate, payDate, totalHours, shiftCount,
-            hourlyRate, grossPay, estimatedTax, estimatedCpp, estimatedEi,
-            totalDeductions, estimatedNetPay
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
-                    [
-                        w.weekKey,
-                        w.startDate,
-                        w.endDate,
-                        w.payDate,
-                        w.totalHours,
-                        w.shiftCount,
-                        w.hourlyRate,
-                        w.grossPay,
-                        w.estimatedTax,
-                        w.estimatedCpp,
-                        w.estimatedEi,
-                        w.totalDeductions,
-                        w.estimatedNetPay,
-                    ]
-                );
-            }
-    });
-    } catch (e) {
-        console.error('Failed to update weekly records in SQLite:', e);
-    }
 }
