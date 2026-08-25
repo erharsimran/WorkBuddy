@@ -18,7 +18,6 @@ function getWeeklyStorageKey(user: string): string {
 const pad = (n: number) => (n < 10 ? `0${n}` : `${n}`);
 const formatYMD = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 
-// ISO-compliant week date math: extracts weekKey, Monday, Sunday, and Thursday deposit date
 function getWeekDetails(dateStr: string) {
     const [year, month, day] = dateStr.split('-').map(Number);
     const target = new Date(year, month - 1, day);
@@ -33,7 +32,7 @@ function getWeekDetails(dateStr: string) {
     const sunday = new Date(monday);
     sunday.setDate(monday.getDate() + 6);
 
-    // Thursday pay deposit date (following week)
+    // Thursday pay deposit date
     const payDate = new Date(monday);
     payDate.setDate(monday.getDate() + 10);
 
@@ -52,7 +51,6 @@ function getWeekDetails(dateStr: string) {
     };
 }
 
-// Calculate tax, CPP, EI, and net pay breakdown
 function calculateWeeklyPay(hours: number) {
     const gross = Number((hours * HOURLY_RATE).toFixed(2));
     const tax = Number((gross * TAX_RATE).toFixed(2));
@@ -71,8 +69,7 @@ function calculateWeeklyPay(hours: number) {
     };
 }
 
-// Aggregates raw shifts into weekly grouped records
-function aggregateShiftsByWeek(shifts: ShiftDbRow[]): WeeklySummary[] {
+export function aggregateShiftsByWeek(shifts: ShiftDbRow[]): WeeklySummary[] {
     const weekMap: Record<
         string,
         {
@@ -151,10 +148,7 @@ export async function replaceAllShifts(shifts: Shift[]): Promise<void> {
         }));
 
         if (typeof window !== 'undefined' && window.localStorage) {
-            // 1. Save shifts table
-            window.localStorage.setItem(getShiftsStorageKey(user), JSON.stringify(formatted));
-
-            // 2. Aggregate & save weekly analysis table
+          window.localStorage.setItem(getShiftsStorageKey(user), JSON.stringify(formatted));
             const weeklyData = aggregateShiftsByWeek(formatted);
             window.localStorage.setItem(getWeeklyStorageKey(user), JSON.stringify(weeklyData));
         }
@@ -163,7 +157,7 @@ export async function replaceAllShifts(shifts: Shift[]): Promise<void> {
     }
 }
 
-// --- WEEKLY HOURS TABLE ---
+// --- WEEKLY HOURS TABLE (WITH AUTO-BACKFILL) ---
 
 export async function fetchWeeklyHours(): Promise<WeeklySummary[]> {
     try {
@@ -172,7 +166,23 @@ export async function fetchWeeklyHours(): Promise<WeeklySummary[]> {
 
         if (typeof window !== 'undefined' && window.localStorage) {
             const raw = window.localStorage.getItem(getWeeklyStorageKey(user));
-            return raw ? JSON.parse(raw) : [];
+            if (raw) {
+                const parsed = JSON.parse(raw);
+                if (Array.isArray(parsed) && parsed.length > 0) {
+                    return parsed;
+                }
+            }
+
+            // Auto-backfill: If weekly records are empty but shifts exist, generate and save them
+            const rawShifts = window.localStorage.getItem(getShiftsStorageKey(user));
+            if (rawShifts) {
+                const shifts: ShiftDbRow[] = JSON.parse(rawShifts);
+                if (shifts.length > 0) {
+                    const backfilled = aggregateShiftsByWeek(shifts);
+                    window.localStorage.setItem(getWeeklyStorageKey(user), JSON.stringify(backfilled));
+                    return backfilled;
+                }
+            }
         }
         return [];
     } catch (e) {
