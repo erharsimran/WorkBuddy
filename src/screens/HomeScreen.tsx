@@ -60,7 +60,6 @@ function formatShiftDate(dateStr: string) {
   return { formattedDate, weekday, relativeTag };
 }
 
-// Auto-calculate hours from start and end time (HH:mm format)
 function calculateDurationHours(start: string, end: string): number {
   try {
     const [startH, startM] = start.split(':').map(Number);
@@ -72,7 +71,7 @@ function calculateDurationHours(start: string, end: string): number {
     let endMinutes = endH * 60 + endM;
 
     if (endMinutes < startMinutes) {
-      endMinutes += 24 * 60; // Crosses midnight
+      endMinutes += 24 * 60;
     }
 
     const diff = (endMinutes - startMinutes) / 60;
@@ -96,12 +95,10 @@ export default function HomeScreen() {
   const [loading, setLoading] = useState<boolean>(false);
   const [selectedShift, setSelectedShift] = useState<ShiftDbRow | null>(null);
 
-  // Wage Editing
   const [hourlyRate, setHourlyRate] = useState<number>(18.10);
   const [isRateModalOpen, setIsRateModalOpen] = useState<boolean>(false);
   const [newRateInput, setNewRateInput] = useState<string>('18.10');
 
-  // Shift Editing State
   const [editingShift, setEditingShift] = useState<ShiftDbRow | null>(null);
   const [editStartTime, setEditStartTime] = useState<string>('');
   const [editEndTime, setEditEndTime] = useState<string>('');
@@ -405,20 +402,30 @@ export default function HomeScreen() {
                           </View>
                         ) : null}
                       </View>
-                      <Text style={styles.hoursBadge}>{item.hours} hrs</Text>
+
+                      <View style={styles.iconActionsRow}>
+                        <Text style={styles.hoursBadge}>{item.hours} hrs</Text>
+                        
+                        <TouchableOpacity
+                          style={styles.iconOnlyBtn}
+                          onPress={() => setSelectedShift(item)}
+                          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                        >
+                          <Text style={styles.actionIcon}>👥</Text>
+                          <Text style={styles.iconBadgeCount}>{item.coworkers?.length || 0}</Text>
+                        </TouchableOpacity>
+
+                        <TouchableOpacity
+                          style={styles.iconOnlyBtn}
+                          onPress={() => handleOpenEditShift(item)}
+                          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                        >
+                          <Text style={styles.actionIcon}>✏️</Text>
+                        </TouchableOpacity>
+                      </View>
                     </View>
 
                     <Text style={styles.timeText}>⏰ {item.start_time} - {item.end_time}</Text>
-
-                    <View style={styles.cardActionsRow}>
-                      <TouchableOpacity style={styles.coworkerBtn} onPress={() => setSelectedShift(item)}>
-                        <Text style={styles.coworkerBtnText}>👥 Coworkers ({item.coworkers?.length || 0})</Text>
-                      </TouchableOpacity>
-
-                      <TouchableOpacity style={styles.editShiftBtn} onPress={() => handleOpenEditShift(item)}>
-                        <Text style={styles.editShiftBtnText}>✏️ Edit Shift</Text>
-                      </TouchableOpacity>
-                    </View>
                   </View>
                 );
               }}
@@ -668,10 +675,33 @@ const styles = StyleSheet.create({
   loadingText: { marginTop: 8, color: '#64748b', fontSize: 14, fontWeight: '600' },
   subtitle: { fontSize: 18, fontWeight: '700', color: '#1e293b', marginTop: 16, marginBottom: 12 },
 
-  card: { backgroundColor: '#ffffff', padding: 16, borderRadius: 14, marginBottom: 12, borderWidth: 1, borderColor: '#e2e8f0' },
-  cardHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 },
-  dateRow: { flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap', flex: 1 },
-  dateText: { fontSize: 16, fontWeight: '700', color: '#0f172a' },
+  card: {
+    backgroundColor: '#ffffff',
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    borderRadius: 14,
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+  },
+  cardHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 4,
+  },
+  dateRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    flexWrap: 'wrap',
+    flex: 1,
+  },
+  dateText: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#0f172a',
+  },
   tagBadge: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6 },
   tagText: { fontSize: 11, fontWeight: '700' },
   todayBadge: { backgroundColor: '#dcfce7' },
@@ -680,13 +710,46 @@ const styles = StyleSheet.create({
   tomorrowText: { color: '#4338ca', fontWeight: '800' },
   relativeBadge: { backgroundColor: '#f1f5f9' },
   relativeText: { color: '#475569' },
-  hoursBadge: { backgroundColor: '#eff6ff', color: '#2563eb', paddingHorizontal: 8, paddingVertical: 2, borderRadius: 6, fontSize: 12, fontWeight: '700' },
-  timeText: { fontSize: 14, color: '#475569', marginBottom: 12, fontWeight: '500' },
-  cardActionsRow: { flexDirection: 'row', gap: 8 },
-  coworkerBtn: { backgroundColor: '#f1f5f9', paddingVertical: 8, paddingHorizontal: 12, borderRadius: 8 },
-  coworkerBtnText: { color: '#334155', fontWeight: '600', fontSize: 13 },
-  editShiftBtn: { backgroundColor: '#eff6ff', paddingVertical: 8, paddingHorizontal: 12, borderRadius: 8, borderWidth: 1, borderColor: '#bfdbfe' },
-  editShiftBtnText: { color: '#2563eb', fontWeight: '700', fontSize: 13 },
+
+  iconActionsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  iconOnlyBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 7,
+    paddingVertical: 4,
+    borderRadius: 6,
+    backgroundColor: '#f8fafc',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+  },
+  actionIcon: {
+    fontSize: 13,
+  },
+  iconBadgeCount: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#475569',
+    marginLeft: 3,
+  },
+  hoursBadge: {
+    backgroundColor: '#eff6ff',
+    color: '#2563eb',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  timeText: {
+    fontSize: 13,
+    color: '#64748b',
+    fontWeight: '500',
+    marginTop: 2,
+  },
   listContent: { paddingBottom: 24 },
   emptyText: { textAlign: 'center', color: '#94a3b8', marginTop: 40, fontSize: 14 },
 
