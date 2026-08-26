@@ -1,17 +1,10 @@
 import { Shift, ShiftDbRow, WeeklySummary } from '../types';
 import { getCurrentUser, getUserHourlyRate } from '../services/auth';
+import { supabase } from '../services/supabase';
 
 const TAX_RATE = Number(process.env.EXPO_PUBLIC_TAX_RATE) || 0.0924;
 const CPP_RATE = Number(process.env.EXPO_PUBLIC_CPP_RATE) || 0.0533;
 const EI_RATE = Number(process.env.EXPO_PUBLIC_EI_RATE) || 0.0163;
-
-function getShiftsStorageKey(user: string): string {
-    return `WORKBUDDY_SHIFTS_${user.toLowerCase()}`;
-}
-
-function getWeeklyStorageKey(user: string): string {
-    return `WORKBUDDY_WEEKLY_HOURS_${user.toLowerCase()}`;
-}
 
 const pad = (n: number) => (n < 10 ? `0${n}` : `${n}`);
 const formatYMD = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
@@ -22,15 +15,19 @@ function getWeekDetails(dateStr: string) {
 
     const dayOfWeek = target.getDay() === 0 ? 7 : target.getDay();
 
+    // Monday of shift week
     const monday = new Date(target);
     monday.setDate(target.getDate() - (dayOfWeek - 1));
 
+    // Sunday of shift week
     const sunday = new Date(monday);
     sunday.setDate(monday.getDate() + 6);
 
+    // Thursday pay deposit date (following week)
     const payDate = new Date(monday);
     payDate.setDate(monday.getDate() + 10);
 
+    // ISO Week numbering
     const d = new Date(Date.UTC(target.getFullYear(), target.getMonth(), target.getDate()));
     const dayNum = d.getUTCDay() || 7;
     d.setUTCDate(d.getUTCDate() + 4 - dayNum);
@@ -80,20 +77,20 @@ export function aggregateShiftsByWeek(shifts: ShiftDbRow[], hourlyRate: number):
         if (!shift.date) return;
         const { weekKey, startDate, endDate, payDate } = getWeekDetails(shift.date);
 
-        if (!weekMap[weekKey]) {
-            weekMap[weekKey] = {
-                weekKey,
-                startDate,
-                endDate,
-                payDate,
-                totalHours: 0,
-                shiftCount: 0,
-            };
-        }
+      if (!weekMap[weekKey]) {
+          weekMap[weekKey] = {
+              weekKey,
+              startDate,
+              endDate,
+              payDate,
+              totalHours: 0,
+              shiftCount: 0,
+          };
+      }
 
-        weekMap[weekKey].totalHours += Number(shift.hours) || 0;
-        weekMap[weekKey].shiftCount += 1;
-    });
+      weekMap[weekKey].totalHours += Number(shift.hours) || 0;
+      weekMap[weekKey].shiftCount += 1;
+  });
 
     return Object.values(weekMap)
         .map((w) => {
@@ -109,110 +106,96 @@ export function aggregateShiftsByWeek(shifts: ShiftDbRow[], hourlyRate: number):
         .sort((a, b) => b.weekKey.localeCompare(a.weekKey));
 }
 
+// 1. Fetch All Shifts From Supabase Cloud DB
 export async function fetchAllShifts(): Promise<ShiftDbRow[]> {
     try {
         const user = await getCurrentUser();
         if (!user) return [];
 
-        if (typeof window !== 'undefined' && window.localStorage) {
-            const raw = window.localStorage.getItem(getShiftsStorageKey(user));
-            return raw ? JSON.parse(raw) : [];
-        }
-        return [];
-    } catch (e) {
-        console.error('Failed to fetch shifts from localStorage:', e);
-        return [];
-    }
+      const { data, error } = await supabase
+          .from('user_shifts')
+          .select('*')
+          .eq('username', user.toLowerCase())
+          .order('date', { ascending: true });
+
+      if (error) {
+          console.error('Supabase fetch error:', error);
+          return [];
+      }
+
+      return (data || []).map((row) => ({
+          id: row.id,
+          date: row.date,
+          start_time: row.start_time,
+          end_time: row.end_time,
+          hours: Number(row.hours),
+          coworkers: row.coworkers || [],
+      }));
+  } catch (e) {
+      console.error('Failed to fetch shifts from cloud:', e);
+      return [];
+  }
 }
 
-export async function replaceAllShifts(shifts: Shift[]): Promise<void> {
+// 2. Insert or Merge New Scanned Shifts (Deduplicating by Date)
+export async function replaceAllShifts(newShifts: Shift[]): Promise<void> {
     try {
         const user = await getCurrentUser();
         if (!user) return;
 
-        const rate = await getUserHourlyRate(user);
+      const rowsToUpsert = newShifts.map((s) => ({
+          username: user.toLowerCase(),
+          date: s.date,
+          start_time: s.startTime,
+          end_time: s.endTime,
+          hours: s.hours,
+          coworkers: s.coworkers || [],
+      }));
 
-        const formatted: ShiftDbRow[] = shifts.map((s, idx) => ({
-            id: idx + 1,
-            date: s.date,
-            start_time: s.startTime,
-            end_time: s.endTime,
-            hours: s.hours,
-            coworkers: s.coworkers || [],
-        }));
+      const { error } = await supabase
+          .from('user_shifts')
+          .upsert(rowsToUpsert, { onConflict: 'username,date' });
 
-        if (typeof window !== 'undefined' && window.localStorage) {
-          window.localStorage.setItem(getShiftsStorageKey(user), JSON.stringify(formatted));
-            const weeklyData = aggregateShiftsByWeek(formatted, rate);
-            window.localStorage.setItem(getWeeklyStorageKey(user), JSON.stringify(weeklyData));
-        }
-    } catch (e) {
-        console.error('Failed to save shifts and weekly records:', e);
-    }
+      if (error) {
+          console.error('Supabase upsert error:', error);
+          throw new Error(error.message);
+      }
+  } catch (e) {
+      console.error('Failed to save/merge shifts to cloud:', e);
+  }
 }
 
-export async function recalculateWeeklyHours(): Promise<WeeklySummary[]> {
-    const user = await getCurrentUser();
-    if (!user) return [];
-
-    const rate = await getUserHourlyRate(user);
-    const shifts = await fetchAllShifts();
-    const recalculated = aggregateShiftsByWeek(shifts, rate);
-
-    if (typeof window !== 'undefined' && window.localStorage) {
-        window.localStorage.setItem(getWeeklyStorageKey(user), JSON.stringify(recalculated));
-    }
-    return recalculated;
-}
-
-export async function fetchWeeklyHours(): Promise<WeeklySummary[]> {
-    try {
-        const user = await getCurrentUser();
-        if (!user) return [];
-
-        const rate = await getUserHourlyRate(user);
-
-        if (typeof window !== 'undefined' && window.localStorage) {
-            const raw = window.localStorage.getItem(getWeeklyStorageKey(user));
-            if (raw) {
-                const parsed = JSON.parse(raw);
-                if (Array.isArray(parsed) && parsed.length > 0) {
-                    return parsed;
-                }
-            }
-
-            // Auto backfill if missing
-            const shifts = await fetchAllShifts();
-            if (shifts.length > 0) {
-                const backfilled = aggregateShiftsByWeek(shifts, rate);
-                window.localStorage.setItem(getWeeklyStorageKey(user), JSON.stringify(backfilled));
-                return backfilled;
-            }
-        }
-        return [];
-    } catch (e) {
-        console.error('Failed to fetch weekly records from localStorage:', e);
-        return [];
-    }
-}
+// 3. Update single shift timing
 export async function updateSingleShift(updatedShift: ShiftDbRow): Promise<void> {
     const user = await getCurrentUser();
     if (!user) return;
 
-    const currentShifts = await fetchAllShifts();
-    const index = currentShifts.findIndex((s) => s.id === updatedShift.id || (s.date === updatedShift.date && s.start_time === updatedShift.start_time));
+    const { error } = await supabase
+        .from('user_shifts')
+        .update({
+            start_time: updatedShift.start_time,
+            end_time: updatedShift.end_time,
+            hours: updatedShift.hours,
+            coworkers: updatedShift.coworkers || [],
+        })
+        .eq('id', updatedShift.id);
 
-    if (index !== -1) {
-        currentShifts[index] = updatedShift;
-    } else {
-        currentShifts.push(updatedShift);
+    if (error) {
+        console.error('Failed to update shift in cloud:', error);
+        throw new Error(error.message);
     }
+}
 
-    // Format and save shifts + recalculate weekly analysis table
+// 4. Fetch Weekly Summaries
+export async function fetchWeeklyHours(): Promise<WeeklySummary[]> {
+    const user = await getCurrentUser();
+    if (!user) return [];
+
     const rate = await getUserHourlyRate(user);
-    if (typeof window !== 'undefined' && window.localStorage) {
-      window.localStorage.setItem(getShiftsStorageKey(user), JSON.stringify(currentShifts));
-      const weeklyData = aggregateShiftsByWeek(currentShifts, rate);
-      window.localStorage.setItem(getWeeklyStorageKey(user), JSON.stringify(weeklyData));
-  }
+    const allShifts = await fetchAllShifts();
+    return aggregateShiftsByWeek(allShifts, rate);
+}
+
+export async function recalculateWeeklyHours(): Promise<WeeklySummary[]> {
+    return await fetchWeeklyHours();
 }
