@@ -33,7 +33,11 @@ import {
 } from '../services/auth';
 import { downloadCalendarReminders } from '../services/calendar';
 
-type TabType = 'schedule' | 'totalhours' | 'monthly';
+type TabType = 'schedule' | 'weekly' | 'monthly';
+
+const TAX_RATE = Number(process.env.EXPO_PUBLIC_TAX_RATE) || 0.0924;
+const CPP_RATE = Number(process.env.EXPO_PUBLIC_CPP_RATE) || 0.0533;
+const EI_RATE = Number(process.env.EXPO_PUBLIC_EI_RATE) || 0.0163;
 
 function getOrdinalSuffix(day: number): string {
   if (day > 3 && day < 21) return `${day}th`;
@@ -46,7 +50,7 @@ function getOrdinalSuffix(day: number): string {
 }
 
 function formatShiftDate(dateStr: string) {
-  if (!dateStr) return { formattedDate: '', weekday: '', relativeTag: '' };
+  if (!dateStr) return { formattedDate: '', weekday: '', relativeTag: '', diffDays: 0 };
 
   const parts = dateStr.split('-');
   const year = parseInt(parts[0], 10);
@@ -72,7 +76,7 @@ function formatShiftDate(dateStr: string) {
   else if (diffDays === -1) relativeTag = 'Yesterday';
   else if (diffDays < -1) relativeTag = `${Math.abs(diffDays)} Days Ago`;
 
-  return { formattedDate, weekday, relativeTag };
+  return { formattedDate, weekday, relativeTag, diffDays };
 }
 
 function calculateDurationHours(start: string, end: string): number {
@@ -94,6 +98,34 @@ function calculateDurationHours(start: string, end: string): number {
   } catch {
     return 0;
   }
+}
+
+function parseTimeToMinutes(timeStr: string): number {
+  if (!timeStr) return 0;
+  const [h, m] = timeStr.split(':').map(Number);
+  return (isNaN(h) ? 0 : h) * 60 + (isNaN(m) ? 0 : m);
+}
+
+function getShiftTag(startTime: string, endTime: string): { tag: string; type: 'open' | 'mid' | 'close' | 'other' } {
+  const startMin = parseTimeToMinutes(startTime);
+  const endMin = parseTimeToMinutes(endTime);
+
+  // Starts around 6:00 AM (up to 7:00 AM)
+  if (startMin >= 330 && startMin <= 420) {
+    return { tag: 'Opening', type: 'open' };
+  }
+
+  // Ends at/after 20:30 (8:30 PM - 10:00 PM)
+  if (endMin >= 1230 || (endMin < startMin && endMin <= 180)) {
+    return { tag: 'Closing', type: 'close' };
+  }
+
+  // Starts before 10:00 AM and leaves around 18:00 - 19:30
+  if (startMin < 600 && endMin >= 1020 && endMin <= 1200) {
+    return { tag: 'Mid Shift', type: 'mid' };
+  }
+
+  return { tag: 'Regular', type: 'other' };
 }
 
 export default function HomeScreen() {
@@ -277,7 +309,7 @@ export default function HomeScreen() {
       setShifts(updated);
       const updatedWeeks = await fetchWeeklyHours();
       setWeeklyList(updatedWeeks);
-      Alert.alert('Schedule Synced', `Loaded ${parsedShifts.length} shifts.`);
+      Alert.alert('Schedule Synced', `Processed and saved roster.`);
     } catch (err: any) {
       Alert.alert('Processing Error', err.message || 'Failed to process roster.');
     } finally {
@@ -285,14 +317,23 @@ export default function HomeScreen() {
     }
   };
 
-  const totalStats = useMemo(() => {
+  const upcomingShifts = useMemo(() => {
+    const now = new Date();
+    const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+    return shifts.filter((s) => s.date >= todayStr);
+  }, [shifts]);
+
+  const weeklyStats = useMemo(() => {
     const totalHours = shifts.reduce((sum, s) => sum + (Number(s.hours) || 0), 0);
     const avgShift = shifts.length > 0 ? (totalHours / shifts.length).toFixed(1) : '0';
     return { totalHours: totalHours.toFixed(1), shiftCount: shifts.length, avgShift };
   }, [shifts]);
 
   const monthlyStats = useMemo(() => {
-    const monthMap: Record<string, { totalHours: number; count: number; label: string }> = {};
+    const monthMap: Record<
+      string,
+      { totalHours: number; count: number; label: string; gross: number; deductions: number; net: number }
+    > = {};
     const monthNames = [
       'January', 'February', 'March', 'April', 'May', 'June',
       'July', 'August', 'September', 'October', 'November', 'December',
@@ -306,8 +347,11 @@ export default function HomeScreen() {
         const key = `${year}-${parts[1]}`;
         const label = `${monthNames[monthIndex]} ${year}`;
 
-        if (!monthMap[key]) monthMap[key] = { totalHours: 0, count: 0, label };
-        monthMap[key].totalHours += Number(shift.hours) || 0;
+        if (!monthMap[key]) {
+          monthMap[key] = { totalHours: 0, count: 0, label, gross: 0, deductions: 0, net: 0 };
+        }
+        const shiftHrs = Number(shift.hours) || 0;
+        monthMap[key].totalHours += shiftHrs;
         monthMap[key].count += 1;
       }
     });
@@ -315,13 +359,37 @@ export default function HomeScreen() {
     return Object.keys(monthMap)
       .sort()
       .reverse()
-      .map((k) => ({
-        key: k,
-        label: monthMap[k].label,
-        totalHours: monthMap[k].totalHours.toFixed(1),
-        count: monthMap[k].count,
-      }));
-  }, [shifts]);
+      .map((k) => {
+        const hours = monthMap[k].totalHours;
+        const gross = Number((hours * hourlyRate).toFixed(2));
+        const tax = Number((gross * TAX_RATE).toFixed(2));
+        const cpp = Number((gross * CPP_RATE).toFixed(2));
+        const ei = Number((gross * EI_RATE).toFixed(2));
+        const deductions = Number((tax + cpp + ei).toFixed(2));
+        const net = Number((gross - deductions).toFixed(2));
+
+        return {
+          key: k,
+          label: monthMap[k].label,
+          totalHours: hours.toFixed(1),
+          count: monthMap[k].count,
+          gross,
+          deductions,
+          net,
+        };
+      });
+  }, [shifts, hourlyRate]);
+
+  const sortedCoworkers = useMemo(() => {
+    if (!selectedShift?.coworkers) return [];
+
+    const list = [...selectedShift.coworkers];
+    return list.sort((a, b) => {
+      const timeA = typeof a === 'object' && a?.startTime ? parseTimeToMinutes(a.startTime) : 0;
+      const timeB = typeof b === 'object' && b?.startTime ? parseTimeToMinutes(b.startTime) : 0;
+      return timeA - timeB;
+    });
+  }, [selectedShift]);
 
   if (authLoading) {
     return (
@@ -333,14 +401,14 @@ export default function HomeScreen() {
     );
   }
 
-  // --- LOGIN SCREEN ---
+  // --- AUTH / LOGIN VIEW ---
   if (!currentUser) {
     return (
       <SafeAreaView style={styles.safeArea}>
         <View style={styles.loginContainer}>
           <View style={styles.loginBox}>
             <Text style={styles.title}>WorkBuddy</Text>
-            <Text style={styles.headerSubtitle}>Sign in to view your stored schedule</Text>
+            <Text style={styles.headerSubtitle}>Sign in to sync your cloud schedule</Text>
 
             <View style={styles.authCard}>
               <Text style={styles.inputLabel}>Employee / Your Name</Text>
@@ -386,7 +454,7 @@ export default function HomeScreen() {
   return (
     <SafeAreaView style={styles.safeArea}>
       <View style={styles.container}>
-        {/* Top Header */}
+        {/* Header */}
         <View style={styles.headerRow}>
           <View>
             <Text style={styles.title}>WorkBuddy</Text>
@@ -397,7 +465,7 @@ export default function HomeScreen() {
           </TouchableOpacity>
         </View>
 
-        {/* Tab 1: SCHEDULE */}
+        {/* Tab 1: SCHEDULE (Upcoming Shifts Only) */}
         {activeTab === 'schedule' && (
           <View style={styles.tabContentContainer}>
             {loading ? (
@@ -426,10 +494,12 @@ export default function HomeScreen() {
             <Text style={styles.subtitle}>Upcoming Shifts</Text>
 
             <FlatList
-              data={shifts}
+              data={upcomingShifts}
               keyExtractor={(item) => item.id.toString()}
               renderItem={({ item }) => {
                 const { formattedDate, relativeTag } = formatShiftDate(item.date);
+                const shiftMeta = getShiftTag(item.start_time, item.end_time);
+
                 return (
                   <View style={styles.card}>
                     <View style={styles.cardHeader}>
@@ -486,13 +556,44 @@ export default function HomeScreen() {
                       </View>
                     </View>
 
-                    <Text style={styles.timeText}>⏰ {item.start_time} - {item.end_time}</Text>
+                    {/* Timing and Shift Tag Badge */}
+                    <View style={styles.timeAndBadgeRow}>
+                      <Text style={styles.timeText}>⏰ {item.start_time} - {item.end_time}</Text>
+                      
+                      <View
+                        style={[
+                          styles.shiftTagBadge,
+                          shiftMeta.type === 'open'
+                            ? styles.openBadge
+                            : shiftMeta.type === 'close'
+                            ? styles.closeBadge
+                            : shiftMeta.type === 'mid'
+                            ? styles.midBadge
+                            : styles.otherBadge,
+                        ]}
+                      >
+                        <Text
+                          style={[
+                            styles.shiftTagText,
+                            shiftMeta.type === 'open'
+                              ? styles.openText
+                              : shiftMeta.type === 'close'
+                              ? styles.closeText
+                              : shiftMeta.type === 'mid'
+                              ? styles.midText
+                              : styles.otherText,
+                          ]}
+                        >
+                          {shiftMeta.tag}
+                        </Text>
+                      </View>
+                    </View>
                   </View>
                 );
               }}
               ListEmptyComponent={
                 <Text style={styles.emptyText}>
-                  No shifts stored. Upload a roster image to populate.
+                  No upcoming shifts scheduled.
                 </Text>
               }
               contentContainerStyle={styles.listContent}
@@ -500,11 +601,11 @@ export default function HomeScreen() {
           </View>
         )}
 
-        {/* Tab 2: TOTAL HOURS & PAY */}
-        {activeTab === 'totalhours' && (
+        {/* Tab 2: WEEKLY BREAKDOWN */}
+        {activeTab === 'weekly' && (
           <ScrollView style={styles.tabContentContainer} contentContainerStyle={styles.listContent}>
             <View style={styles.payHeaderRow}>
-              <Text style={styles.subtitle}>Pay & Hours Analysis</Text>
+              <Text style={styles.subtitle}>Weekly Statements</Text>
               <TouchableOpacity
                 style={styles.editRateBtn}
                 onPress={() => setIsRateModalOpen(true)}
@@ -513,29 +614,17 @@ export default function HomeScreen() {
               </TouchableOpacity>
             </View>
 
-            <View style={styles.summaryCard}>
-              <Text style={styles.summaryLabel}>Total Accumulated Net Pay</Text>
-              <Text style={styles.summaryNumber}>
-                ${weeklyList.reduce((acc, w) => acc + (w.estimatedNetPay || 0), 0).toFixed(2)}
-              </Text>
-              <Text style={styles.summaryRateText}>
-                {totalStats.totalHours} hrs Total • Est. Take-Home (@ ${hourlyRate.toFixed(2)}/hr)
-              </Text>
-            </View>
-
             <View style={styles.statsGrid}>
               <View style={styles.statBox}>
-                <Text style={styles.statNumber}>{totalStats.shiftCount}</Text>
-                <Text style={styles.statLabel}>Total Shifts</Text>
+                <Text style={styles.statNumber}>{weeklyStats.totalHours} hrs</Text>
+                <Text style={styles.statLabel}>Total Hours Logged</Text>
               </View>
 
               <View style={styles.statBox}>
-                <Text style={styles.statNumber}>{totalStats.avgShift} hrs</Text>
-                <Text style={styles.statLabel}>Avg / Shift</Text>
+                <Text style={styles.statNumber}>{weeklyStats.shiftCount}</Text>
+                <Text style={styles.statLabel}>Total Shifts</Text>
               </View>
             </View>
-
-            <Text style={[styles.subtitle, { marginTop: 20 }]}>Weekly Pay Statements</Text>
 
             {weeklyList.length === 0 ? (
               <Text style={styles.emptyText}>No weekly shift records found.</Text>
@@ -577,21 +666,40 @@ export default function HomeScreen() {
           </ScrollView>
         )}
 
-        {/* Tab 3: MONTHLY */}
+        {/* Tab 3: MONTHLY BREAKDOWN */}
         {activeTab === 'monthly' && (
           <ScrollView style={styles.tabContentContainer} contentContainerStyle={styles.listContent}>
-            <Text style={styles.subtitle}>Monthly Breakdown</Text>
+            <Text style={styles.subtitle}>Monthly Summary</Text>
             {monthlyStats.length === 0 ? (
               <Text style={styles.emptyText}>No shift data available.</Text>
             ) : (
               monthlyStats.map((item) => (
-                <View key={item.key} style={styles.monthlyCard}>
-                  <View>
-                    <Text style={styles.monthTitle}>{item.label}</Text>
-                    <Text style={styles.monthSub}>{item.count} scheduled shifts</Text>
+                <View key={item.key} style={styles.monthlyPayCard}>
+                  <View style={styles.monthlyCardHeader}>
+                    <View>
+                      <Text style={styles.monthTitle}>{item.label}</Text>
+                      <Text style={styles.monthSub}>{item.count} shifts worked</Text>
+                    </View>
+                    <View style={styles.monthBadge}>
+                      <Text style={styles.monthHoursText}>{item.totalHours} hrs</Text>
+                    </View>
                   </View>
-                  <View style={styles.monthBadge}>
-                    <Text style={styles.monthHoursText}>{item.totalHours} hrs</Text>
+
+                  <View style={styles.payRowDivider} />
+
+                  <View style={styles.payDetailsRow}>
+                    <Text style={styles.payDetailLabel}>Gross Earnings:</Text>
+                    <Text style={styles.payDetailValue}>${item.gross.toFixed(2)}</Text>
+                  </View>
+
+                  <View style={styles.payDetailsRow}>
+                    <Text style={styles.payDetailLabel}>Est. Deductions:</Text>
+                    <Text style={styles.payDetailDeduct}>-${item.deductions.toFixed(2)}</Text>
+                  </View>
+
+                  <View style={[styles.payDetailsRow, { marginTop: 4 }]}>
+                    <Text style={styles.payDetailNetLabel}>Est. Net Earnings:</Text>
+                    <Text style={styles.payDetailNetValue}>${item.net.toFixed(2)}</Text>
                   </View>
                 </View>
               ))
@@ -599,7 +707,7 @@ export default function HomeScreen() {
           </ScrollView>
         )}
 
-        {/* Coworkers Modal with Shift Timings */}
+        {/* Coworkers Modal with Shift Timing Tags & Chronological Sort */}
         <Modal visible={!!selectedShift} animationType="fade" transparent={true}>
           <View style={styles.modalOverlay}>
             <View style={styles.modalContent}>
@@ -608,22 +716,52 @@ export default function HomeScreen() {
                 {selectedShift ? formatShiftDate(selectedShift.date).formattedDate : ''}
               </Text>
 
-              <ScrollView style={{ maxHeight: 320, marginVertical: 14 }}>
-                {selectedShift?.coworkers && selectedShift.coworkers.length > 0 ? (
-                  selectedShift.coworkers.map((c: CoworkerShift | string, idx: number) => {
+              <ScrollView style={{ maxHeight: 340, marginVertical: 14 }}>
+                {sortedCoworkers.length > 0 ? (
+                  sortedCoworkers.map((c: CoworkerShift | string, idx: number) => {
                     const isObject = typeof c === 'object' && c !== null;
                     const name = isObject ? c.name : c;
-                    const timeRange =
-                      isObject && c.startTime && c.endTime
-                        ? `${c.startTime} - ${c.endTime}`
-                        : null;
+                    const startTime = isObject ? c.startTime : '';
+                    const endTime = isObject ? c.endTime : '';
+                    const timeRange = startTime && endTime ? `${startTime} - ${endTime}` : null;
+                    const shiftMeta = getShiftTag(startTime, endTime);
 
                     return (
                       <View key={idx} style={styles.coworkerRow}>
-                        <Text style={styles.coworkerNameText}>• {name}</Text>
+                        <View style={{ flex: 1, paddingRight: 8 }}>
+                          <Text style={styles.coworkerNameText}>• {name}</Text>
+                          {timeRange ? (
+                            <Text style={styles.coworkerSubTime}>⏰ {timeRange}</Text>
+                          ) : null}
+                        </View>
+
                         {timeRange ? (
-                          <View style={styles.coworkerTimeBadge}>
-                            <Text style={styles.coworkerTimeText}>⏰ {timeRange}</Text>
+                          <View
+                            style={[
+                              styles.shiftTagBadge,
+                              shiftMeta.type === 'open'
+                                ? styles.openBadge
+                                : shiftMeta.type === 'close'
+                                ? styles.closeBadge
+                                : shiftMeta.type === 'mid'
+                                ? styles.midBadge
+                                : styles.otherBadge,
+                            ]}
+                          >
+                            <Text
+                              style={[
+                                styles.shiftTagText,
+                                shiftMeta.type === 'open'
+                                  ? styles.openText
+                                  : shiftMeta.type === 'close'
+                                  ? styles.closeText
+                                  : shiftMeta.type === 'mid'
+                                  ? styles.midText
+                                  : styles.otherText,
+                              ]}
+                            >
+                              {shiftMeta.tag}
+                            </Text>
                           </View>
                         ) : null}
                       </View>
@@ -731,7 +869,7 @@ export default function HomeScreen() {
         </Modal>
       </View>
 
-      {/* Persistent Bottom Tab Bar */}
+      {/* Bottom Navigation Bar */}
       <View style={styles.bottomTabBar}>
         <TouchableOpacity
           style={[styles.tabItem, activeTab === 'schedule' && styles.activeTabItem]}
@@ -744,12 +882,12 @@ export default function HomeScreen() {
         </TouchableOpacity>
 
         <TouchableOpacity
-          style={[styles.tabItem, activeTab === 'totalhours' && styles.activeTabItem]}
-          onPress={() => setActiveTab('totalhours')}
+          style={[styles.tabItem, activeTab === 'weekly' && styles.activeTabItem]}
+          onPress={() => setActiveTab('weekly')}
         >
           <Text style={styles.tabIcon}>⏱️</Text>
-          <Text style={[styles.tabLabel, activeTab === 'totalhours' && styles.activeTabLabel]}>
-            Total Hours
+          <Text style={[styles.tabLabel, activeTab === 'weekly' && styles.activeTabLabel]}>
+            Weekly
           </Text>
         </TouchableOpacity>
 
@@ -823,7 +961,7 @@ const styles = StyleSheet.create({
   },
   logoutBtnText: { color: '#ef4444', fontWeight: '700', fontSize: 13 },
 
-  // Action Buttons
+  // Actions
   actionButtonRow: { flexDirection: 'row', gap: 10, marginTop: 4 },
   actionButton: { paddingVertical: 14, borderRadius: 12, alignItems: 'center' },
   uploadButton: { flex: 1, backgroundColor: '#2563eb' },
@@ -847,7 +985,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 4,
+    marginBottom: 6,
   },
   dateRow: {
     flexDirection: 'row',
@@ -903,18 +1041,23 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '700',
   },
+  timeAndBadgeRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginTop: 4,
+  },
   timeText: {
     fontSize: 13,
-    color: '#64748b',
-    fontWeight: '500',
-    marginTop: 2,
+    color: '#475569',
+    fontWeight: '600',
   },
   listContent: { paddingBottom: 24 },
   emptyText: { textAlign: 'center', color: '#94a3b8', marginTop: 40, fontSize: 14 },
 
   modalFieldLabel: { fontSize: 13, fontWeight: '700', color: '#475569', marginTop: 12, marginBottom: 4 },
 
-  // Pay & Total Hours View
+  // Weekly Analysis
   payHeaderRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   editRateBtn: {
     backgroundColor: '#f1f5f9',
@@ -925,23 +1068,7 @@ const styles = StyleSheet.create({
     borderColor: '#cbd5e1',
   },
   editRateBtnText: { color: '#0f172a', fontWeight: '700', fontSize: 13 },
-  summaryCard: {
-    backgroundColor: '#0f172a',
-    padding: 24,
-    borderRadius: 16,
-    alignItems: 'center',
-    marginBottom: 16,
-  },
-  summaryLabel: {
-    color: '#94a3b8',
-    fontSize: 13,
-    fontWeight: '700',
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-  },
-  summaryNumber: { color: '#38bdf8', fontSize: 40, fontWeight: '900', marginTop: 6 },
-  summaryRateText: { fontSize: 13, fontWeight: '600', color: '#cbd5e1', marginTop: 6 },
-  statsGrid: { flexDirection: 'row', gap: 12, marginBottom: 8 },
+  statsGrid: { flexDirection: 'row', gap: 12, marginBottom: 12 },
   statBox: {
     flex: 1,
     backgroundColor: '#ffffff',
@@ -986,14 +1113,16 @@ const styles = StyleSheet.create({
   payDetailNetLabel: { fontSize: 14, color: '#0f172a', fontWeight: '800' },
   payDetailNetValue: { fontSize: 15, color: '#059669', fontWeight: '900' },
 
-  // Monthly Tab
-  monthlyCard: {
+  // Monthly Breakdown
+  monthlyPayCard: {
     backgroundColor: '#ffffff',
-    padding: 18,
+    padding: 16,
     borderRadius: 14,
     marginBottom: 12,
     borderWidth: 1,
     borderColor: '#e2e8f0',
+  },
+  monthlyCardHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
@@ -1022,27 +1151,40 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    paddingVertical: 8,
+    paddingVertical: 10,
     borderBottomWidth: 1,
     borderBottomColor: '#f1f5f9',
   },
   coworkerNameText: {
     fontSize: 15,
     color: '#0f172a',
-    fontWeight: '600',
-    flex: 1,
+    fontWeight: '700',
   },
-  coworkerTimeBadge: {
-    backgroundColor: '#eff6ff',
+  coworkerSubTime: {
+    fontSize: 12,
+    color: '#64748b',
+    fontWeight: '500',
+    marginTop: 2,
+  },
+  shiftTagBadge: {
     paddingHorizontal: 8,
     paddingVertical: 4,
     borderRadius: 6,
   },
-  coworkerTimeText: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: '#2563eb',
+  shiftTagText: {
+    fontSize: 11,
+    fontWeight: '800',
+    textTransform: 'uppercase',
   },
+  openBadge: { backgroundColor: '#fef3c7' },
+  openText: { color: '#b45309' },
+  midBadge: { backgroundColor: '#e0e7ff' },
+  midText: { color: '#4338ca' },
+  closeBadge: { backgroundColor: '#fee2e2' },
+  closeText: { color: '#b91c1c' },
+  otherBadge: { backgroundColor: '#f1f5f9' },
+  otherText: { color: '#475569' },
+
   noCoworkersText: {
     fontSize: 14,
     color: '#94a3b8',
@@ -1058,7 +1200,7 @@ const styles = StyleSheet.create({
   },
   closeBtnText: { color: '#fff', fontWeight: '700' },
 
-  // Bottom Navigation Bar
+  // Navigation Bar
   bottomTabBar: {
     flexDirection: 'row',
     backgroundColor: '#ffffff',
