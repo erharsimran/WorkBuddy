@@ -17,13 +17,15 @@ import * as ImagePicker from 'expo-image-picker';
 import { ShiftDbRow, WeeklySummary, CoworkerShift } from '../types';
 import {
   fetchAllShifts,
-  replaceAllShifts,
+  saveFullStoreRoster,
   fetchWeeklyHours,
   recalculateWeeklyHours,
   updateSingleShift,
+  fetchStoreEmployees,
+  updateStoreEmployee,
 } from '../database/db';
-import { setupNotificationChannels, scheduleShiftAlarms } from '../services/notifications';
-import { parseScheduleFromImage } from '../services/gemini';
+import { setupNotificationChannels } from '../services/notifications';
+import { parseFullStoreRoster } from '../services/gemini';
 import {
   getCurrentUser,
   loginOrRegister,
@@ -33,7 +35,14 @@ import {
 } from '../services/auth';
 import { downloadCalendarReminders } from '../services/calendar';
 
-type TabType = 'schedule' | 'weekly' | 'monthly';
+type TabType = 'schedule' | 'weekly' | 'monthly' | 'admin';
+
+interface EmployeeRecord {
+  id: number;
+  full_name: string;
+  display_name: string;
+  role_category: string;
+}
 
 const TAX_RATE = Number(process.env.EXPO_PUBLIC_TAX_RATE) || 0.0924;
 const CPP_RATE = Number(process.env.EXPO_PUBLIC_CPP_RATE) || 0.0533;
@@ -89,12 +98,11 @@ function calculateDurationHours(start: string, end: string): number {
     let startMinutes = startH * 60 + startM;
     let endMinutes = endH * 60 + endM;
 
-    if (endMinutes < startMinutes) {
-      endMinutes += 24 * 60;
-    }
+    if (endMinutes < startMinutes) endMinutes += 24 * 60;
 
     const diff = (endMinutes - startMinutes) / 60;
-    return Number(diff.toFixed(2));
+    const net = diff > 5.5 ? diff - 0.5 : diff;
+    return Number(net.toFixed(2));
   } catch {
     return 0;
   }
@@ -110,17 +118,9 @@ function getShiftTag(startTime: string, endTime: string): { tag: string; type: '
   const startMin = parseTimeToMinutes(startTime);
   const endMin = parseTimeToMinutes(endTime);
 
-  if (startMin >= 330 && startMin <= 420) {
-    return { tag: 'Opening', type: 'open' };
-  }
-
-  if (endMin >= 1230 || (endMin < startMin && endMin <= 180)) {
-    return { tag: 'Closing', type: 'close' };
-  }
-
-  if (startMin < 600 && endMin >= 1020 && endMin <= 1200) {
-    return { tag: 'Mid Shift', type: 'mid' };
-  }
+  if (startMin >= 330 && startMin <= 420) return { tag: 'Opening', type: 'open' };
+  if (endMin >= 1230 || (endMin < startMin && endMin <= 180)) return { tag: 'Closing', type: 'close' };
+  if (startMin < 600 && endMin >= 1020 && endMin <= 1200) return { tag: 'Mid Shift', type: 'mid' };
 
   return { tag: 'Regular', type: 'other' };
 }
@@ -158,6 +158,16 @@ export default function HomeScreen() {
   const [editEndTime, setEditEndTime] = useState<string>('');
   const [editHours, setEditHours] = useState<string>('');
 
+  // Admin states
+  const [employees, setEmployees] = useState<EmployeeRecord[]>([]);
+  const [editingEmp, setEditingEmp] = useState<EmployeeRecord | null>(null);
+  const [empDisplayNameInput, setEmpDisplayNameInput] = useState('');
+  const [empRoleInput, setEmpRoleInput] = useState('');
+
+  const isAdmin = useMemo(() => {
+    return currentUser?.toLowerCase().trim().startsWith('harry') ?? false;
+  }, [currentUser]);
+
   useEffect(() => {
     (async () => {
       try {
@@ -173,6 +183,11 @@ export default function HomeScreen() {
           setShifts(savedShifts);
           const savedWeeks = await fetchWeeklyHours();
           setWeeklyList(savedWeeks);
+
+          if (savedUser.toLowerCase().trim().startsWith('harry')) {
+            const empList = await fetchStoreEmployees();
+            setEmployees(empList);
+          }
         }
       } catch (err) {
         console.error('Failed to restore session:', err);
@@ -211,6 +226,12 @@ export default function HomeScreen() {
       setShifts(saved);
       const savedWeeks = await fetchWeeklyHours();
       setWeeklyList(savedWeeks);
+
+      if (trimmedUser.toLowerCase().startsWith('harry')) {
+        const empList = await fetchStoreEmployees();
+        setEmployees(empList);
+      }
+
       setNameInput('');
       setPassInput('');
     } catch (err: any) {
@@ -225,6 +246,8 @@ export default function HomeScreen() {
     setCurrentUser(null);
     setShifts([]);
     setWeeklyList([]);
+    setEmployees([]);
+    setActiveTab('schedule');
   };
 
   const handleSaveHourlyRate = async () => {
@@ -295,8 +318,9 @@ export default function HomeScreen() {
     setEditingShift(null);
   };
 
-  const handleUploadSchedule = async () => {
-    if (!currentUser) return;
+  // Admin: Upload Roster
+  const handleAdminUploadSchedule = async () => {
+    if (!isAdmin) return;
 
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
@@ -308,19 +332,57 @@ export default function HomeScreen() {
 
     setLoading(true);
     try {
-      const parsedShifts = await parseScheduleFromImage(result.assets[0].base64, currentUser);
-      await replaceAllShifts(parsedShifts);
-      await scheduleShiftAlarms(parsedShifts);
+      const matrixData = await parseFullStoreRoster(result.assets[0].base64);
+      await saveFullStoreRoster(matrixData);
 
       const updated = await fetchAllShifts();
       setShifts(updated);
       const updatedWeeks = await fetchWeeklyHours();
       setWeeklyList(updatedWeeks);
-      Alert.alert('Schedule Synced', `Processed and saved roster.`);
+
+      const updatedEmps = await fetchStoreEmployees();
+      setEmployees(updatedEmps);
+
+      Alert.alert('Store Synced', `Processed store schedule for week of ${matrixData.week}.`);
     } catch (err: any) {
-      Alert.alert('Processing Error', err.message || 'Failed to process roster.');
+      Alert.alert('Processing Error', err.message || 'Failed to process store roster.');
     } finally {
       setLoading(false);
+    }
+  };
+
+  // Admin: Open Edit Employee
+  const handleOpenEditEmp = (emp: EmployeeRecord) => {
+    setEditingEmp(emp);
+    setEmpDisplayNameInput(emp.display_name);
+    setEmpRoleInput(emp.role_category || 'Staff');
+  };
+
+  // Admin: Save Employee
+  const handleSaveEmp = async () => {
+    if (!editingEmp) return;
+    if (!empDisplayNameInput.trim()) {
+      Alert.alert('Validation Error', 'Employee name cannot be empty.');
+      return;
+    }
+
+    try {
+      await updateStoreEmployee(
+        editingEmp.id,
+        editingEmp.display_name,
+        empDisplayNameInput.trim(),
+        empRoleInput.trim()
+      );
+
+      const updatedEmps = await fetchStoreEmployees();
+      setEmployees(updatedEmps);
+      const updatedShifts = await fetchAllShifts();
+      setShifts(updatedShifts);
+
+      setEditingEmp(null);
+      Alert.alert('Success', 'Employee profile updated.');
+    } catch (err: any) {
+      Alert.alert('Error', err.message || 'Failed to update employee.');
     }
   };
 
@@ -433,7 +495,7 @@ export default function HomeScreen() {
         <View style={styles.loginContainer}>
           <View style={styles.loginBox}>
             <Text style={styles.title}>WorkBuddy</Text>
-            <Text style={styles.headerSubtitle}>Sign in to sync your cloud schedule</Text>
+            <Text style={styles.headerSubtitle}>Sign in to access your store schedule</Text>
 
             <View style={styles.authCard}>
               <Text style={styles.inputLabel}>Employee / Your Name</Text>
@@ -483,38 +545,26 @@ export default function HomeScreen() {
         <View style={styles.headerRow}>
           <View>
             <Text style={styles.title}>WorkBuddy</Text>
-            <Text style={styles.headerSubtitle}>Logged in as {currentUser}</Text>
+            <Text style={styles.headerSubtitle}>
+              Logged in as {currentUser} {isAdmin ? '👑 (Admin)' : ''}
+            </Text>
           </View>
           <TouchableOpacity style={styles.logoutBtn} onPress={handleLogout}>
             <Text style={styles.logoutBtnText}>Logout</Text>
           </TouchableOpacity>
         </View>
 
-        {/* Tab 1: SCHEDULE (Upcoming Shifts Only) */}
+        {/* Tab 1: SCHEDULE (Upcoming Shifts Only - No Upload for regular users) */}
         {activeTab === 'schedule' && (
           <View style={styles.tabContentContainer}>
-            {loading ? (
-              <View style={styles.loadingContainer}>
-                <ActivityIndicator size="large" color="#2563eb" />
-                <Text style={styles.loadingText}>Extracting schedule & team with Gemini...</Text>
-              </View>
-            ) : (
-              <View style={styles.actionButtonRow}>
-                <TouchableOpacity
-                  style={[styles.actionButton, styles.uploadButton]}
-                  onPress={handleUploadSchedule}
-                >
-                  <Text style={styles.actionButtonText}>🖼️ Upload Roster</Text>
-                </TouchableOpacity>
-
-                <TouchableOpacity
-                  style={[styles.actionButton, styles.reminderButton]}
-                  onPress={() => downloadCalendarReminders(shifts, currentUser || 'My')}
-                >
-                  <Text style={styles.actionButtonText}>📅 Add to Calendar</Text>
-                </TouchableOpacity>
-              </View>
-            )}
+            <View style={styles.actionButtonRow}>
+              <TouchableOpacity
+                style={[styles.actionButton, styles.reminderButton]}
+                onPress={() => downloadCalendarReminders(shifts, currentUser || 'My')}
+              >
+                <Text style={styles.actionButtonText}>📅 Add to Calendar (.ics)</Text>
+              </TouchableOpacity>
+            </View>
 
             <Text style={styles.subtitle}>Upcoming Shifts</Text>
 
@@ -581,7 +631,6 @@ export default function HomeScreen() {
                       </View>
                     </View>
 
-                    {/* Timing and Shift Tag Badge */}
                     <View style={styles.timeAndBadgeRow}>
                       <Text style={styles.timeText}>⏰ {item.start_time} - {item.end_time}</Text>
                       
@@ -639,9 +688,10 @@ export default function HomeScreen() {
               </TouchableOpacity>
             </View>
 
-            {/* This Week Expected Earnings Card */}
             <View style={styles.expectedEarningsCard}>
-              <Text style={styles.expectedLabel}>This Week Expected Net Pay ({currentWeekExpectedEarnings.weekKey})</Text>
+              <Text style={styles.expectedLabel}>
+                This Week Expected Net Pay ({currentWeekExpectedEarnings.weekKey})
+              </Text>
               <Text style={styles.expectedNumber}>
                 ${currentWeekExpectedEarnings.net.toFixed(2)}
               </Text>
@@ -662,7 +712,6 @@ export default function HomeScreen() {
                       <Text style={styles.payDepositText}>Deposit Date: {w.payDate}</Text>
                     </View>
                     
-                    {/* Shift Count Next to Hours */}
                     <View style={styles.weeklyBadgeGroup}>
                       <View style={styles.shiftCountBadgeContainer}>
                         <Text style={styles.shiftCountBadge}>{w.shiftCount} shifts</Text>
@@ -738,7 +787,106 @@ export default function HomeScreen() {
           </ScrollView>
         )}
 
-        {/* Coworkers Modal with Shift Timing Tags & Chronological Sort */}
+        {/* Tab 4: ADMIN PANEL (Harry Only) */}
+        {activeTab === 'admin' && isAdmin && (
+          <ScrollView style={styles.tabContentContainer} contentContainerStyle={styles.listContent}>
+            <Text style={styles.subtitle}>Store Operations</Text>
+
+            {/* Admin Action: Upload Full Roster */}
+            <View style={styles.adminActionCard}>
+              <Text style={styles.adminCardTitle}>Upload Weekly Store Schedule</Text>
+              <Text style={styles.adminCardSub}>
+                Upload the Dollarama store roster image to scan and update shifts for all staff.
+              </Text>
+
+              {loading ? (
+                <View style={{ paddingVertical: 12, alignItems: 'center' }}>
+                  <ActivityIndicator size="small" color="#2563eb" />
+                  <Text style={{ marginTop: 6, color: '#64748b', fontSize: 13 }}>Processing full roster...</Text>
+                </View>
+              ) : (
+                <TouchableOpacity
+                  style={[styles.actionButton, styles.uploadButton, { marginTop: 12 }]}
+                  onPress={handleAdminUploadSchedule}
+                >
+                  <Text style={styles.actionButtonText}>🖼️ Upload & Process Roster</Text>
+                </TouchableOpacity>
+              )}
+            </View>
+
+            {/* Admin Action: Manage Store Users */}
+            <Text style={[styles.subtitle, { marginTop: 24 }]}>
+              Store Employee Directory ({employees.length})
+            </Text>
+
+            {employees.length === 0 ? (
+              <Text style={styles.emptyText}>No employees registered yet. Upload a roster.</Text>
+            ) : (
+              employees.map((emp) => (
+                <View key={emp.id} style={styles.empCard}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.empNameText}>
+                      {emp.display_name} <Text style={styles.empIdBadge}>(ID #{emp.id})</Text>
+                    </Text>
+                    <Text style={styles.empRoleText}>
+                      🏷️ {emp.role_category || 'Staff'} • Full: {emp.full_name}
+                    </Text>
+                  </View>
+
+                  <TouchableOpacity
+                    style={styles.empEditBtn}
+                    onPress={() => handleOpenEditEmp(emp)}
+                  >
+                    <Text style={styles.empEditBtnText}>✏️ Edit</Text>
+                  </TouchableOpacity>
+                </View>
+              ))
+            )}
+          </ScrollView>
+        )}
+
+        {/* Admin Modal: Edit Employee Profile */}
+        <Modal visible={!!editingEmp} animationType="fade" transparent={true}>
+          <View style={styles.modalOverlay}>
+            <View style={styles.modalContent}>
+              <Text style={styles.modalTitle}>Edit Employee Details</Text>
+              <Text style={styles.modalSub}>ID #{editingEmp?.id} • Original: {editingEmp?.full_name}</Text>
+
+              <Text style={styles.modalFieldLabel}>Display / Login Name</Text>
+              <TextInput
+                style={styles.textInput}
+                value={empDisplayNameInput}
+                onChangeText={setEmpDisplayNameInput}
+                placeholder="e.g. Harry H."
+              />
+
+              <Text style={styles.modalFieldLabel}>Role / Category</Text>
+              <TextInput
+                style={styles.textInput}
+                value={empRoleInput}
+                onChangeText={setEmpRoleInput}
+                placeholder="e.g. Management, ATL and TL, Full Time, Part Time"
+              />
+
+              <View style={{ flexDirection: 'row', gap: 10, marginTop: 16 }}>
+                <TouchableOpacity
+                  style={[styles.closeBtn, { flex: 1, backgroundColor: '#94a3b8' }]}
+                  onPress={() => setEditingEmp(null)}
+                >
+                  <Text style={styles.closeBtnText}>Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.closeBtn, { flex: 1, backgroundColor: '#2563eb' }]}
+                  onPress={handleSaveEmp}
+                >
+                  <Text style={styles.closeBtnText}>Save</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </View>
+        </Modal>
+
+        {/* Coworkers Modal */}
         <Modal visible={!!selectedShift} animationType="fade" transparent={true}>
           <View style={styles.modalOverlay}>
             <View style={styles.modalContent}>
@@ -931,6 +1079,19 @@ export default function HomeScreen() {
             Monthly
           </Text>
         </TouchableOpacity>
+
+        {/* Admin Tab (Exclusive to Harry) */}
+        {isAdmin && (
+          <TouchableOpacity
+            style={[styles.tabItem, activeTab === 'admin' && styles.activeTabItem]}
+            onPress={() => setActiveTab('admin')}
+          >
+            <Text style={styles.tabIcon}>👑</Text>
+            <Text style={[styles.tabLabel, activeTab === 'admin' && styles.activeTabLabel]}>
+              Admin
+            </Text>
+          </TouchableOpacity>
+        )}
       </View>
     </SafeAreaView>
   );
@@ -942,7 +1103,7 @@ const styles = StyleSheet.create({
   container: { flex: 1, paddingHorizontal: 20, paddingTop: 16 },
   tabContentContainer: { flex: 1 },
 
-  // Auth / Login
+  // Auth
   loginContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 20 },
   loginBox: { width: '100%', maxWidth: 400 },
   authCard: {
@@ -998,8 +1159,6 @@ const styles = StyleSheet.create({
   uploadButton: { flex: 1, backgroundColor: '#2563eb' },
   reminderButton: { flex: 1, backgroundColor: '#7c3aed' },
   actionButtonText: { color: '#ffffff', fontSize: 14, fontWeight: '700' },
-  loadingContainer: { paddingVertical: 20, alignItems: 'center' },
-  loadingText: { marginTop: 8, color: '#64748b', fontSize: 14, fontWeight: '600' },
   subtitle: { fontSize: 18, fontWeight: '700', color: '#1e293b', marginTop: 16, marginBottom: 12 },
 
   // Shift Cards
@@ -1084,7 +1243,7 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   listContent: { paddingBottom: 24 },
-  emptyText: { textAlign: 'center', color: '#94a3b8', marginTop: 40, fontSize: 14 },
+  emptyText: { textAlign: 'center', color: '#94a3b8', marginTop: 30, fontSize: 14 },
 
   modalFieldLabel: { fontSize: 13, fontWeight: '700', color: '#475569', marginTop: 12, marginBottom: 4 },
 
@@ -1203,7 +1362,42 @@ const styles = StyleSheet.create({
   },
   monthHoursText: { color: '#2563eb', fontWeight: '800', fontSize: 14 },
 
-  // Modals & Coworker Schedule Rows
+  // Admin Tab Styles
+  adminActionCard: {
+    backgroundColor: '#ffffff',
+    padding: 18,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+    marginBottom: 10,
+  },
+  adminCardTitle: { fontSize: 16, fontWeight: '800', color: '#0f172a' },
+  adminCardSub: { fontSize: 13, color: '#64748b', marginTop: 4, lineHeight: 18 },
+  empCard: {
+    backgroundColor: '#ffffff',
+    padding: 14,
+    borderRadius: 12,
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  empNameText: { fontSize: 15, fontWeight: '800', color: '#0f172a' },
+  empIdBadge: { fontSize: 12, fontWeight: '600', color: '#64748b' },
+  empRoleText: { fontSize: 13, color: '#475569', marginTop: 3 },
+  empEditBtn: {
+    backgroundColor: '#f1f5f9',
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+  },
+  empEditBtnText: { fontSize: 13, fontWeight: '700', color: '#0f172a' },
+
+  // Modals & Coworkers
   modalOverlay: {
     flex: 1,
     backgroundColor: 'rgba(0,0,0,0.5)',
@@ -1221,27 +1415,10 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: '#f1f5f9',
   },
-  coworkerNameText: {
-    fontSize: 15,
-    color: '#0f172a',
-    fontWeight: '700',
-  },
-  coworkerSubTime: {
-    fontSize: 12,
-    color: '#64748b',
-    fontWeight: '500',
-    marginTop: 2,
-  },
-  shiftTagBadge: {
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 6,
-  },
-  shiftTagText: {
-    fontSize: 11,
-    fontWeight: '800',
-    textTransform: 'uppercase',
-  },
+  coworkerNameText: { fontSize: 15, color: '#0f172a', fontWeight: '700' },
+  coworkerSubTime: { fontSize: 12, color: '#64748b', fontWeight: '500', marginTop: 2 },
+  shiftTagBadge: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6 },
+  shiftTagText: { fontSize: 11, fontWeight: '800', textTransform: 'uppercase' },
   openBadge: { backgroundColor: '#fef3c7' },
   openText: { color: '#b45309' },
   midBadge: { backgroundColor: '#e0e7ff' },
@@ -1250,13 +1427,7 @@ const styles = StyleSheet.create({
   closeText: { color: '#b91c1c' },
   otherBadge: { backgroundColor: '#f1f5f9' },
   otherText: { color: '#475569' },
-
-  noCoworkersText: {
-    fontSize: 14,
-    color: '#94a3b8',
-    fontStyle: 'italic',
-    paddingVertical: 8,
-  },
+  noCoworkersText: { fontSize: 14, color: '#94a3b8', fontStyle: 'italic', paddingVertical: 8 },
   closeBtn: {
     backgroundColor: '#0f172a',
     paddingVertical: 12,

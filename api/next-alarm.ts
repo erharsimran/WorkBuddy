@@ -25,62 +25,69 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     try {
         const username = ((req.query.user as string) || 'harry').toLowerCase().trim();
 
-        // Current date formatted for America/Toronto (EST/EDT)
-        const now = new Date();
-        const estDateStr = now.toLocaleDateString('en-CA', { timeZone: 'America/Toronto' });
+      // Current date in America/Toronto (EST/EDT)
+      const now = new Date();
+      const estDateStr = now.toLocaleDateString('en-CA', { timeZone: 'America/Toronto' });
 
-        const { data: shifts, error } = await supabase
-            .from('user_shifts')
-            .select('*')
-            .eq('username', username)
-            .gte('date', estDateStr)
-            .order('date', { ascending: true })
-            .order('start_time', { ascending: true })
-            .limit(2);
+      // Query normalized store_shifts table
+      const { data: shifts, error } = await supabase
+        .from('store_shifts')
+        .select('*')
+        .ilike('employee_name', `${username}%`)
+        .gte('date', estDateStr)
+        .eq('is_vacation', false)
+        .neq('start_time', '00:00')
+        .order('date', { ascending: true })
+        .order('start_time', { ascending: true })
+        .limit(5);
 
-        if (error) {
-            return res.status(500).json({ error: error.message });
-        }
-        let hasShift = "";
-        if (!shifts || shifts.length === 0) {
-            return res.status(200).json({
-                hasShift: false,
-                message: 'No upcoming shifts found.',
-            });
-        }
+      if (error) {
+          return res.status(500).json({ error: error.message });
+      }
 
-        const nextShift = shifts[0];
-        const [startH, startM] = nextShift.start_time.split(':').map(Number);
+      if (!shifts || shifts.length === 0) {
+          return res.status(200).json({
+              hasShift: false,
+              message: 'No upcoming shifts found.',
+          });
+      }
 
-        // Compute alarm trigger time (2 hours prior)
-        let alarmH = startH - 2;
-        let alarmM = startM;
-        let alarmDateStr = nextShift.date;
+      // Filter out shifts from today that have already ended
+      const currentHourMin = `${pad(now.getHours())}:${pad(now.getMinutes())}`;
+      const nextShift =
+          shifts.find((s) => s.date > estDateStr || (s.date === estDateStr && s.end_time > currentHourMin)) ||
+          shifts[0];
 
-        if (alarmH < 0) {
-            alarmH += 24;
+      const [startH, startM] = nextShift.start_time.split(':').map(Number);
 
-            const prevDate = new Date(nextShift.date + 'T00:00:00');
-            prevDate.setDate(prevDate.getDate() - 1);
-            alarmDateStr = `${prevDate.getFullYear()}-${pad(prevDate.getMonth() + 1)}-${pad(prevDate.getDate())}`;
+      // Compute alarm trigger time (2 hours prior)
+      let alarmH = startH - 2;
+      let alarmM = startM;
+      let alarmDateStr = nextShift.date;
 
-        }
-        hasShift = "yes";
-        const alarmTime = `${pad(alarmH)}:${pad(alarmM)}`;
-
-        return res.status(200).json({
-            hasShift: hasShift,
-            shiftDate: nextShift.date,
-            shiftStart: nextShift.start_time,
-            shiftEnd: nextShift.end_time,
-            shiftHours: nextShift.hours,
-            alarmDate: alarmDateStr,
-            alarmTime: alarmTime,
-            alarmHour: alarmH,
-            alarmMinute: alarmM,
-            label: `Work Shift (${nextShift.start_time} - ${nextShift.end_time})`,
-        });
-    } catch (err: any) {
-        return res.status(500).json({ error: err.message || 'Internal Server Error' });
+      if (alarmH < 0) {
+          alarmH += 24;
+        const prevDate = new Date(nextShift.date + 'T00:00:00');
+        prevDate.setDate(prevDate.getDate() - 1);
+        alarmDateStr = `${prevDate.getFullYear()}-${pad(prevDate.getMonth() + 1)}-${pad(prevDate.getDate())}`;
     }
+
+      const alarmTime = `${pad(alarmH)}:${pad(alarmM)}`;
+
+      return res.status(200).json({
+        hasShift: true,
+        employeeName: nextShift.employee_name,
+        shiftDate: nextShift.date,
+        shiftStart: nextShift.start_time,
+        shiftEnd: nextShift.end_time,
+        shiftHours: nextShift.hours,
+        alarmDate: alarmDateStr,
+        alarmTime: alarmTime,
+        alarmHour: alarmH,
+        alarmMinute: alarmM,
+        label: `Work Shift (${nextShift.start_time} - ${nextShift.end_time})`,
+    });
+  } catch (err: any) {
+      return res.status(500).json({ error: err.message || 'Internal Server Error' });
+  }
 }
