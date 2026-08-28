@@ -2,3 +2,9 @@
 .vercel
 node_modules/
 .env
+android/
+ios/
+.expo/
+.vscode/
+.vercel/
+package-lock.json

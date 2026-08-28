@@ -110,22 +110,29 @@ function getShiftTag(startTime: string, endTime: string): { tag: string; type: '
   const startMin = parseTimeToMinutes(startTime);
   const endMin = parseTimeToMinutes(endTime);
 
-  // Starts around 6:00 AM (up to 7:00 AM)
   if (startMin >= 330 && startMin <= 420) {
     return { tag: 'Opening', type: 'open' };
   }
 
-  // Ends at/after 20:30 (8:30 PM - 10:00 PM)
   if (endMin >= 1230 || (endMin < startMin && endMin <= 180)) {
     return { tag: 'Closing', type: 'close' };
   }
 
-  // Starts before 10:00 AM and leaves around 18:00 - 19:30
   if (startMin < 600 && endMin >= 1020 && endMin <= 1200) {
     return { tag: 'Mid Shift', type: 'mid' };
   }
 
   return { tag: 'Regular', type: 'other' };
+}
+
+function getCurrentWeekKey(): string {
+  const target = new Date();
+  const d = new Date(Date.UTC(target.getFullYear(), target.getMonth(), target.getDate()));
+  const dayNum = d.getUTCDay() || 7;
+  d.setUTCDate(d.getUTCDate() + 4 - dayNum);
+  const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
+  const weekNo = Math.ceil(((d.getTime() - yearStart.getTime()) / 86400000 + 1) / 7);
+  return `${d.getUTCFullYear()}-W${weekNo < 10 ? `0${weekNo}` : weekNo}`;
 }
 
 export default function HomeScreen() {
@@ -323,11 +330,29 @@ export default function HomeScreen() {
     return shifts.filter((s) => s.date >= todayStr);
   }, [shifts]);
 
-  const weeklyStats = useMemo(() => {
-    const totalHours = shifts.reduce((sum, s) => sum + (Number(s.hours) || 0), 0);
-    const avgShift = shifts.length > 0 ? (totalHours / shifts.length).toFixed(1) : '0';
-    return { totalHours: totalHours.toFixed(1), shiftCount: shifts.length, avgShift };
-  }, [shifts]);
+  const currentWeekExpectedEarnings = useMemo(() => {
+    const activeKey = getCurrentWeekKey();
+    const currentSummary = weeklyList.find((w) => w.weekKey === activeKey);
+
+    if (currentSummary) {
+      return {
+        gross: currentSummary.grossPay || 0,
+        net: currentSummary.estimatedNetPay || 0,
+        hours: currentSummary.totalHours || 0,
+        shiftCount: currentSummary.shiftCount || 0,
+        weekKey: currentSummary.weekKey,
+      };
+    }
+
+    const latest = weeklyList[0];
+    return {
+      gross: latest?.grossPay || 0,
+      net: latest?.estimatedNetPay || 0,
+      hours: latest?.totalHours || 0,
+      shiftCount: latest?.shiftCount || 0,
+      weekKey: latest?.weekKey || activeKey,
+    };
+  }, [weeklyList]);
 
   const monthlyStats = useMemo(() => {
     const monthMap: Record<
@@ -614,16 +639,15 @@ export default function HomeScreen() {
               </TouchableOpacity>
             </View>
 
-            <View style={styles.statsGrid}>
-              <View style={styles.statBox}>
-                <Text style={styles.statNumber}>{weeklyStats.totalHours} hrs</Text>
-                <Text style={styles.statLabel}>Total Hours Logged</Text>
-              </View>
-
-              <View style={styles.statBox}>
-                <Text style={styles.statNumber}>{weeklyStats.shiftCount}</Text>
-                <Text style={styles.statLabel}>Total Shifts</Text>
-              </View>
+            {/* This Week Expected Earnings Card */}
+            <View style={styles.expectedEarningsCard}>
+              <Text style={styles.expectedLabel}>This Week Expected Net Pay ({currentWeekExpectedEarnings.weekKey})</Text>
+              <Text style={styles.expectedNumber}>
+                ${currentWeekExpectedEarnings.net.toFixed(2)}
+              </Text>
+              <Text style={styles.expectedSubText}>
+                Gross: ${currentWeekExpectedEarnings.gross.toFixed(2)} • {currentWeekExpectedEarnings.hours} hrs ({currentWeekExpectedEarnings.shiftCount} shifts)
+              </Text>
             </View>
 
             {weeklyList.length === 0 ? (
@@ -637,8 +661,15 @@ export default function HomeScreen() {
                       <Text style={styles.payDateRangeText}>{w.startDate} to {w.endDate}</Text>
                       <Text style={styles.payDepositText}>Deposit Date: {w.payDate}</Text>
                     </View>
-                    <View style={styles.hoursBadgeContainer}>
-                      <Text style={styles.payHoursBadge}>{w.totalHours} hrs</Text>
+                    
+                    {/* Shift Count Next to Hours */}
+                    <View style={styles.weeklyBadgeGroup}>
+                      <View style={styles.shiftCountBadgeContainer}>
+                        <Text style={styles.shiftCountBadge}>{w.shiftCount} shifts</Text>
+                      </View>
+                      <View style={styles.hoursBadgeContainer}>
+                        <Text style={styles.payHoursBadge}>{w.totalHours} hrs</Text>
+                      </View>
                     </View>
                   </View>
 
@@ -1068,18 +1099,34 @@ const styles = StyleSheet.create({
     borderColor: '#cbd5e1',
   },
   editRateBtnText: { color: '#0f172a', fontWeight: '700', fontSize: 13 },
-  statsGrid: { flexDirection: 'row', gap: 12, marginBottom: 12 },
-  statBox: {
-    flex: 1,
-    backgroundColor: '#ffffff',
-    padding: 16,
-    borderRadius: 14,
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
+
+  expectedEarningsCard: {
+    backgroundColor: '#0f172a',
+    padding: 20,
+    borderRadius: 16,
     alignItems: 'center',
+    marginBottom: 16,
   },
-  statNumber: { fontSize: 20, fontWeight: '800', color: '#0f172a' },
-  statLabel: { fontSize: 12, color: '#64748b', marginTop: 4, fontWeight: '600' },
+  expectedLabel: {
+    color: '#94a3b8',
+    fontSize: 12,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+    textAlign: 'center',
+  },
+  expectedNumber: {
+    color: '#38bdf8',
+    fontSize: 36,
+    fontWeight: '900',
+    marginTop: 6,
+  },
+  expectedSubText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#cbd5e1',
+    marginTop: 4,
+  },
 
   payCard: {
     backgroundColor: '#ffffff',
@@ -1093,6 +1140,25 @@ const styles = StyleSheet.create({
   payWeekTitle: { fontSize: 16, fontWeight: '800', color: '#0f172a' },
   payDateRangeText: { fontSize: 12, color: '#64748b', marginTop: 2, fontWeight: '500' },
   payDepositText: { fontSize: 12, color: '#059669', marginTop: 2, fontWeight: '700' },
+  
+  weeklyBadgeGroup: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  shiftCountBadgeContainer: {
+    backgroundColor: '#f1f5f9',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+  },
+  shiftCountBadge: {
+    color: '#475569',
+    fontWeight: '700',
+    fontSize: 12,
+  },
   hoursBadgeContainer: {
     backgroundColor: '#eff6ff',
     paddingHorizontal: 10,
