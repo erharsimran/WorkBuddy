@@ -392,3 +392,26 @@ export async function deleteStoreEmployee(id: number) {
 
     if (error) throw new Error(error.message);
 }
+// Fetch shifts for a specific employee ID
+export async function fetchShiftsByEmployeeId(employeeId: number): Promise<ShiftDbRow[]> {
+    try {
+        const { data: userShifts, error } = await supabase
+            .from('store_shifts')
+            .select('*')
+            .eq('employee_id', employeeId)
+            .order('date', { ascending: true });
+
+        if (error || !userShifts) return [];
+
+        return userShifts.map((row) => ({
+            id: row.id,
+            date: row.date,
+            start_time: row.start_time,
+            end_time: row.end_time,
+            hours: Number(row.hours),
+        }));
+    } catch (e) {
+        console.error('Error in fetchShiftsByEmployeeId:', e);
+        return [];
+    }
+}

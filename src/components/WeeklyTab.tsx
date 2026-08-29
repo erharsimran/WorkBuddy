@@ -1,6 +1,8 @@
 import React, { useMemo } from 'react';
-import { StyleSheet, Text, View, ScrollView, TouchableOpacity } from 'react-native';
+import { StyleSheet, Text, View, ScrollView, TouchableOpacity, Linking, Platform } from 'react-native';
 import { WeeklySummary } from '../types';
+
+const ESS_URL = 'https://ess-sp.dollarama.com/ess/index.html#/paystub';
 
 interface Props {
   weeklyList: WeeklySummary[];
@@ -31,17 +33,34 @@ export const WeeklyTab: React.FC<Props> = ({ weeklyList, hourlyRate, onOpenRateM
     };
   }, [weeklyList]);
 
+  const handleOpenESS = () => {
+    if (Platform.OS === 'web' && typeof window !== 'undefined') {
+      window.open(ESS_URL, '_blank', 'noopener,noreferrer');
+    } else {
+      Linking.openURL(ESS_URL);
+    }
+  };
+
   return (
     <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: 24 }}>
-      <View style={styles.payHeaderRow}>
-        <Text style={styles.subtitle}>Weekly Statements</Text>
+      {/* Top Action Bar: ESS Portal Launch & Base Rate Setting */}
+      <View style={styles.topActionsRow}>
+        <TouchableOpacity style={styles.essLaunchBtn} onPress={handleOpenESS}>
+          <Text style={styles.essLaunchBtnText}>💳 Open Dollarama ESS</Text>
+        </TouchableOpacity>
+
         <TouchableOpacity style={styles.editRateBtn} onPress={onOpenRateModal}>
           <Text style={styles.editRateBtnText}>⚙️ Base: ${hourlyRate.toFixed(2)}/hr</Text>
         </TouchableOpacity>
       </View>
 
+      <Text style={styles.subtitle}>Weekly Statements</Text>
+
+      {/* Expected Pay Projection Card */}
       <View style={styles.expectedEarningsCard}>
-        <Text style={styles.expectedLabel}>This Week Expected Net Pay ({currentExpected.weekKey})</Text>
+        <Text style={styles.expectedLabel}>
+          This Week Expected Net Pay ({currentExpected.weekKey})
+        </Text>
         <Text style={styles.expectedNumber}>${currentExpected.net.toFixed(2)}</Text>
         <Text style={styles.expectedSubText}>
           Gross: ${currentExpected.gross.toFixed(2)} • {currentExpected.hours} hrs ({currentExpected.shiftCount} shifts)
@@ -60,8 +79,12 @@ export const WeeklyTab: React.FC<Props> = ({ weeklyList, hourlyRate, onOpenRateM
                 <Text style={styles.payDepositText}>Deposit Date: {w.payDate}</Text>
               </View>
               <View style={styles.weeklyBadgeGroup}>
-                <View style={styles.shiftCountBadgeContainer}><Text style={styles.shiftCountBadge}>{w.shiftCount} shifts</Text></View>
-                <View style={styles.hoursBadgeContainer}><Text style={styles.payHoursBadge}>{w.totalHours} hrs</Text></View>
+                <View style={styles.shiftCountBadgeContainer}>
+                  <Text style={styles.shiftCountBadge}>{w.shiftCount} shifts</Text>
+                </View>
+                <View style={styles.hoursBadgeContainer}>
+                  <Text style={styles.payHoursBadge}>{w.totalHours} hrs</Text>
+                </View>
               </View>
             </View>
 
@@ -86,11 +109,38 @@ export const WeeklyTab: React.FC<Props> = ({ weeklyList, hourlyRate, onOpenRateM
 };
 
 const styles = StyleSheet.create({
-  subtitle: { fontSize: 18, fontWeight: '700', color: '#1e293b', marginTop: 16, marginBottom: 12 },
-  payHeaderRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  editRateBtn: { backgroundColor: '#f1f5f9', paddingVertical: 6, paddingHorizontal: 12, borderRadius: 8, borderWidth: 1, borderColor: '#cbd5e1' },
+  topActionsRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginTop: 4,
+    marginBottom: 6,
+  },
+  essLaunchBtn: {
+    flex: 1,
+    backgroundColor: '#005a36', // Dollarama Green
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  essLaunchBtnText: {
+    color: '#ffffff',
+    fontWeight: '800',
+    fontSize: 13,
+  },
+  editRateBtn: {
+    backgroundColor: '#f1f5f9',
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+    justifyContent: 'center',
+  },
   editRateBtnText: { color: '#0f172a', fontWeight: '700', fontSize: 13 },
-  expectedEarningsCard: { backgroundColor: '#0f172a', padding: 20, borderRadius: 16, alignItems: 'center', marginBottom: 16, marginTop: 12 },
+  subtitle: { fontSize: 18, fontWeight: '700', color: '#1e293b', marginTop: 12, marginBottom: 12 },
+  expectedEarningsCard: { backgroundColor: '#0f172a', padding: 20, borderRadius: 16, alignItems: 'center', marginBottom: 16 },
   expectedLabel: { color: '#94a3b8', fontSize: 12, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.5 },
   expectedNumber: { color: '#38bdf8', fontSize: 36, fontWeight: '900', marginTop: 6 },
   expectedSubText: { fontSize: 13, fontWeight: '600', color: '#cbd5e1', marginTop: 4 },
