@@ -1,31 +1,48 @@
 import { ShiftDbRow, CoworkerShift } from '../types';
 
 export function downloadCalendarReminders(shifts: ShiftDbRow[], employeeName: string) {
-    if (!shifts || shifts.length === 0) return;
+    // Filter out empty, vacation, or non-working rows
+    const validShifts = (shifts || []).filter(
+        (s) => s.start_time && s.end_time && s.start_time !== '00:00' && Number(s.hours) > 0
+    );
+
+    if (validShifts.length === 0) return;
 
     const pad = (n: number) => (n < 10 ? `0${n}` : `${n}`);
 
-    const vEvents = shifts.map((shift, index) => {
+    const vEvents = validShifts.map((shift, index) => {
         const [year, month, day] = shift.date.split('-').map(Number);
         const [startHour, startMin] = shift.start_time.split(':').map(Number);
         const [endHour, endMin] = shift.end_time.split(':').map(Number);
 
-      const dtStart = `${year}${pad(month)}${pad(day)}T${pad(startHour)}${pad(startMin)}00`;
-      const dtEnd = `${year}${pad(month)}${pad(day)}T${pad(endHour)}${pad(endMin)}00`;
+      const startDate = new Date(year, month - 1, day, startHour, startMin);
+      const endDate = new Date(year, month - 1, day, endHour, endMin);
+
+      // Handle overnight shifts ending next day
+      if (endDate <= startDate) {
+          endDate.setDate(endDate.getDate() + 1);
+      }
+
+      const dtStart = `${startDate.getFullYear()}${pad(startDate.getMonth() + 1)}${pad(startDate.getDate())}T${pad(startDate.getHours())}${pad(startDate.getMinutes())}00`;
+      const dtEnd = `${endDate.getFullYear()}${pad(endDate.getMonth() + 1)}${pad(endDate.getDate())}${pad(endDate.getHours())}${pad(endDate.getMinutes())}00`;
       const uid = `shift-${shift.date}-${shift.start_time}-${index}@workbuddy.app`;
 
-      const coworkerListText = shift.coworkers && shift.coworkers.length > 0
-          ? shift.coworkers.map((c: CoworkerShift | string) =>
-              typeof c === 'string' ? c : `${c.name} [${c.startTime} - ${c.endTime}]`
-          ).join('\\n• ')
-          : 'None';
+      const coworkerListText =
+          shift.coworkers && shift.coworkers.length > 0
+              ? shift.coworkers
+                  .map((c: CoworkerShift | string) =>
+                      typeof c === 'string'
+                          ? c
+                          : `${c.name} [${c.startTime} - ${c.endTime}]`
+                  )
+                  .join('\\n• ')
+              : 'None';
 
       const description = `Team Schedule:\\n• ${coworkerListText}`;
 
-      const shiftStartTime = new Date(year, month - 1, day, startHour, startMin);
+      // Reminder 1: Night before at 10:00 PM
       const prevDay10PM = new Date(year, month - 1, day - 1, 22, 0, 0);
-      const diffMinutes = Math.round((shiftStartTime.getTime() - prevDay10PM.getTime()) / (1000 * 60));
-
+      const diffMinutes = Math.round((startDate.getTime() - prevDay10PM.getTime()) / (1000 * 60));
       const hoursOffset = Math.floor(diffMinutes / 60);
       const minsOffset = diffMinutes % 60;
       const duration10PM = minsOffset > 0 ? `-PT${hoursOffset}H${minsOffset}M` : `-PT${hoursOffset}H`;
@@ -61,11 +78,13 @@ export function downloadCalendarReminders(shifts: ShiftDbRow[], employeeName: st
         'END:VCALENDAR',
     ].join('\r\n');
 
+    const fileName = `${employeeName.replace(/[^a-zA-Z0-9]/g, '_')}_Work_Schedule.ics`;
+
     const blob = new Blob([icsContent], { type: 'text/calendar;charset=utf-8' });
     const url = window.URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.setAttribute('download', `${employeeName}_Work_Schedule.ics`);
+    link.setAttribute('download', fileName);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);

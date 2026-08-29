@@ -1,0 +1,9 @@
+node_modules
+.expo
+.expo-shared
+web-build
+dist
+ios
+android
+.DS_Store
+.git

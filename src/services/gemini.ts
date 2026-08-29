@@ -1,40 +1,38 @@
-import { Shift } from '../types';
+import { supabase } from './supabase';
 
-export async function parseScheduleFromImage(
-    imageBase64: string,
-    targetEmployeeName: string
-): Promise<Shift[]> {
+export interface RawRosterMatrix {
+    week: string; // "YYYY-MM-DD"
+    store: string;
+    rows: [string, string, string, string, string, string, string, string, string][];
+    // [Role, Name, Mon, Tue, Wed, Thu, Fri, Sat, Sun]
+}
+
+export async function parseFullStoreRoster(imageBase64: string): Promise<RawRosterMatrix> {
     const apiKey = process.env.EXPO_PUBLIC_GEMINI_API_KEY;
-
-    if (!apiKey) {
-        throw new Error('Missing Gemini API Key. Check EXPO_PUBLIC_GEMINI_API_KEY in .env.');
-    }
+    if (!apiKey) throw new Error('Missing Gemini API Key.');
 
     const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key=${apiKey}`;
 
-    const prompt = `
-    Analyze this work roster image.
-    Find all scheduled shifts for the employee named "${targetEmployeeName}".
-    
-    For each shift of "${targetEmployeeName}":
-    1. Extract the shift date in "YYYY-MM-DD" format.
-    2. Extract start_time and end_time in 24-hour "HH:mm" format (e.g. "12:00", "21:30").
-    3. Calculate total hours worked as a decimal number.
-    4. List ALL coworkers scheduled on that SAME date. For each coworker, include their name and their exact scheduled shift startTime and endTime (e.g., {"name": "Neeru D.", "startTime": "12:00", "endTime": "21:30"}). Exclude "${targetEmployeeName}".
 
-    Respond ONLY with a valid JSON array matching this structure:
-    [
-      {
-        "date": "YYYY-MM-DD",
-        "startTime": "HH:mm",
-        "endTime": "HH:mm",
-        "hours": 7.5,
-        "coworkers": [
-          { "name": "Name", "startTime": "HH:mm", "endTime": "HH:mm" }
-        ]
-      }
-    ]
-  `;
+    const prompt = `
+Transcribe this store schedule grid into flat rows.
+
+1. "week": Date from "Week of: [Month Day, Year]" in YYYY-MM-DD.
+2. "store": Store number string (e.g. "0305").
+3. "rows": Array of rows. Each row is an array of 9 string elements:
+   [Role, Employee Name, Mon, Tue, Wed, Thu, Fri, Sat, Sun]
+   - Time format: exact raw shift text like "06:00a-04:30p", "02:00p-09:30p", or "Vacation".
+   - If empty/off day, use empty string "".
+
+Return ONLY valid JSON matching this exact structure:
+{
+  "week": "2026-08-31",
+  "store": "0305",
+  "rows": [
+    ["ATL and TL", "Harry H.", "02:00p-09:30p", "02:00p-09:30p", "", "06:00a-12:30p", "06:00a-12:30p", "02:00p-09:30p", ""]
+  ]
+}
+`;
 
     const body = {
         contents: [
@@ -42,40 +40,30 @@ export async function parseScheduleFromImage(
                 role: 'user',
                 parts: [
                     { text: prompt },
-                    {
-                        inlineData: {
-                            mimeType: 'image/jpeg',
-                            data: imageBase64,
-                        },
-                    },
+                    { inlineData: { mimeType: 'image/jpeg', data: imageBase64 } },
                 ],
             },
         ],
         generationConfig: {
             responseMimeType: 'application/json',
+            temperature: 0.1, // Low temperature for strict data extraction
         },
     };
 
     const response = await fetch(url, {
         method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
   });
 
     if (!response.ok) {
         const errorData = await response.json().catch(() => ({}));
-        const message = errorData.error?.message || `Request failed with status ${response.status}`;
-        throw new Error(`Gemini API Error: ${message}`);
+        throw new Error(`Gemini Parsing Error: ${errorData.error?.message || response.statusText}`);
     }
 
     const result = await response.json();
     const rawText = result.candidates?.[0]?.content?.parts?.[0]?.text;
+    if (!rawText) throw new Error('No roster data found.');
 
-    if (!rawText) {
-        throw new Error('No roster data found in image.');
-    }
-
-    return JSON.parse(rawText) as Shift[];
+    return JSON.parse(rawText) as RawRosterMatrix;
 }

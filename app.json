@@ -5,16 +5,13 @@
     "version": "1.0.0",
     "orientation": "portrait",
     "userInterfaceStyle": "light",
-    "plugins": [
-      [
-        "expo-notifications",
-        {
-          "sounds": [
-            "./assets/sounds/loud_alarm.wav"
-          ]
-        }
-      ],
-      "expo-sqlite"
-    ]
+    "plugins": ["expo-sqlite"],
+    "android": {
+      "package": "com.anonymous.workbuddy"
+    },
+    "ios": {
+      "bundleIdentifier": "com.anonymous.workbuddy"
+    }
   }
 }
+
