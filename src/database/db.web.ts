@@ -96,7 +96,7 @@ function calculateWeeklyPay(hours: number, hourlyRate: number) {
     };
 }
 
-// 1. Save entire store roster to relational tables
+// 1. Relational Store Roster Upsert (Fetch IDs first, map shifts to employee_id)
 export async function saveFullStoreRoster(matrix: RawRosterMatrix): Promise<void> {
     const [startY, startM, startD] = matrix.week.split('-').map(Number);
     const weekStartDate = new Date(Date.UTC(startY, startM - 1, startD));
@@ -106,19 +106,59 @@ export async function saveFullStoreRoster(matrix: RawRosterMatrix): Promise<void
         { onConflict: 'store_number,week_start_date' }
     );
 
+    // Fetch current employees to preserve customized display names
+    const { data: existingEmps } = await supabase.from('employees').select('*');
+    const existingMap = new Map((existingEmps || []).map((e) => [e.full_name.toLowerCase().trim(), e]));
+
     const employeesToUpsert: any[] = [];
+    for (const row of matrix.rows) {
+        const [role, name] = row;
+        if (!name || !name.trim()) continue;
+
+        const rawFullName = name.trim();
+        const existing = existingMap.get(rawFullName.toLowerCase());
+        const displayName = existing ? existing.display_name : rawFullName;
+
+        employeesToUpsert.push({
+            full_name: rawFullName,
+            display_name: displayName,
+            role_category: role || 'Staff',
+        });
+    }
+
+    // Deduplicate before upserting employees
+    const uniqueEmployees = Array.from(
+        new Map(employeesToUpsert.map((e) => [e.full_name.toLowerCase(), e])).values()
+    );
+
+    const { error: empErr } = await supabase
+        .from('employees')
+        .upsert(uniqueEmployees, { onConflict: 'full_name' });
+
+    if (empErr) throw new Error(`Employee sync error: ${empErr.message}`);
+
+    // Fetch fresh dictionary of all employee IDs: { [full_name.toLowerCase()]: employee_id }
+    const { data: refreshedEmps, error: refErr } = await supabase
+        .from('employees')
+        .select('id, full_name, display_name');
+
+    if (refErr || !refreshedEmps) throw new Error('Failed to retrieve employee IDs');
+
+    const empIdMap = new Map<string, number>();
+    refreshedEmps.forEach((emp) => {
+        empIdMap.set(emp.full_name.toLowerCase().trim(), emp.id);
+    });
+
     const shiftRows: any[] = [];
 
     for (const row of matrix.rows) {
-        const [role, name, ...days] = row;
+        const [, name, ...days] = row;
         if (!name || !name.trim()) continue;
 
-        const cleanName = name.trim();
-        employeesToUpsert.push({
-            full_name: cleanName,
-            display_name: cleanName,
-            role_category: role || 'Staff',
-        });
+        const rawFullName = name.trim();
+        const employeeId = empIdMap.get(rawFullName.toLowerCase());
+
+        if (!employeeId) continue;
 
         days.forEach((cellText, dayIndex) => {
             if (!cellText || !cellText.trim()) return;
@@ -142,7 +182,8 @@ export async function saveFullStoreRoster(matrix: RawRosterMatrix): Promise<void
       }
 
             shiftRows.push({
-                employee_name: cleanName,
+                employee_id: employeeId,
+                employee_name: rawFullName, // Keep as readable backup
                 date: dateStr,
                 start_time: startTime,
                 end_time: endTime,
@@ -153,50 +194,66 @@ export async function saveFullStoreRoster(matrix: RawRosterMatrix): Promise<void
         });
     }
 
-    await supabase.from('employees').upsert(employeesToUpsert, { onConflict: 'display_name' });
+    // Deduplicate shifts on (employee_id, date)
+    const uniqueShifts = Array.from(
+        new Map(shiftRows.map((s) => [`${s.employee_id}__${s.date}`, s])).values()
+    );
 
-    const { error } = await supabase
+    const { error: shiftErr } = await supabase
         .from('store_shifts')
-        .upsert(shiftRows, { onConflict: 'employee_name,date' });
+        .upsert(uniqueShifts, { onConflict: 'employee_id,date' });
 
-    if (error) {
-        console.error('Database Sync Error:', error);
-        throw new Error(error.message);
-    }
+    if (shiftErr) throw new Error(`Shift sync error: ${shiftErr.message}`);
 }
 
-// 2. Fetch logged-in user shifts + attach dynamic coworkers
+// 2. Relational Query: Fetch Current User Shifts with Joined Coworkers
 export async function fetchAllShifts(): Promise<ShiftDbRow[]> {
     try {
         const user = await getCurrentUser();
         if (!user) return [];
 
+        const cleanUser = user.trim().toLowerCase();
+
+        // 1. Resolve User ID from employees table
+        const { data: empRecord } = await supabase
+            .from('employees')
+            .select('id, full_name, display_name')
+            .or(`display_name.ilike.${cleanUser}%,full_name.ilike.${cleanUser}%`)
+            .limit(1)
+            .maybeSingle();
+
+        if (!empRecord) return [];
+
+        // 2. Fetch shifts relationally using employee_id
         const { data: userShifts, error } = await supabase
             .from('store_shifts')
           .select('*')
-          .ilike('employee_name', `${user.trim()}%`)
+            .eq('employee_id', empRecord.id)
           .order('date', { ascending: true });
 
-        if (error || !userShifts) {
-            console.error('Shift fetch error:', error);
-          return [];
-      }
+        if (error || !userShifts) return [];
 
+        // 3. Relational Join: Fetch coworkers on working dates joining employees table
         const shiftDates = [...new Set(userShifts.map((s) => s.date))];
         const { data: allStoreShifts } = await supabase
             .from('store_shifts')
-            .select('*')
+            .select(`
+        date,
+        start_time,
+        end_time,
+        employee_id,
+        employees (
+          id,
+          display_name
+        )
+      `)
             .in('date', shiftDates);
 
         return userShifts.map((row) => {
             const coworkers = (allStoreShifts || [])
-                .filter(
-                    (s) =>
-                        s.date === row.date &&
-                        s.employee_name.toLowerCase() !== row.employee_name.toLowerCase()
-                )
-                .map((s) => ({
-                    name: s.employee_name,
+                .filter((s: any) => s.date === row.date && s.employee_id !== empRecord.id)
+                .map((s: any) => ({
+                    name: s.employees?.display_name || s.employee_name || 'Staff',
                     startTime: s.start_time,
                     endTime: s.end_time,
                 }));
@@ -216,7 +273,21 @@ export async function fetchAllShifts(): Promise<ShiftDbRow[]> {
   }
 }
 
-// 3. Update single shift
+// 3. Employee Directory & Profile Update
+export async function fetchStoreEmployees() {
+    const { data, error } = await supabase
+        .from('employees')
+        .select('*')
+        .order('role_category', { ascending: true })
+        .order('full_name', { ascending: true });
+
+    if (error) return [];
+    return data || [];
+}
+
+
+
+// 4. Update Single Shift
 export async function updateSingleShift(updatedShift: ShiftDbRow): Promise<void> {
     const { error } = await supabase
         .from('store_shifts')
@@ -224,17 +295,14 @@ export async function updateSingleShift(updatedShift: ShiftDbRow): Promise<void>
             start_time: updatedShift.start_time,
             end_time: updatedShift.end_time,
             hours: updatedShift.hours,
-          shift_type: getShiftTypeTag(updatedShift.start_time, updatedShift.end_time),
-      })
+            shift_type: getShiftTypeTag(updatedShift.start_time, updatedShift.end_time),
+        })
         .eq('id', updatedShift.id);
 
-    if (error) {
-        console.error('Failed to update shift:', error);
-        throw new Error(error.message);
-    }
+    if (error) throw new Error(error.message);
 }
 
-// 4. Fetch weekly summaries
+// 5. Weekly Summaries
 export async function fetchWeeklyHours(): Promise<WeeklySummary[]> {
     const user = await getCurrentUser();
     if (!user) return [];
@@ -282,47 +350,43 @@ export async function fetchWeeklyHours(): Promise<WeeklySummary[]> {
         .sort((a, b) => b.weekKey.localeCompare(a.weekKey));
 }
 
-// 5. Recalculate weekly hours
 export async function recalculateWeeklyHours(): Promise<WeeklySummary[]> {
     return await fetchWeeklyHours();
 }
 
 
-// Fetch all registered store employees
-export async function fetchStoreEmployees() {
-    const { data, error } = await supabase
-        .from('employees')
-        .select('*')
-        .order('role_category', { ascending: true })
-        .order('display_name', { ascending: true });
 
-    if (error) {
-        console.error('Fetch employees error:', error);
-        return [];
-    }
-    return data || [];
-}
-
-// Update employee name and role
+// Update complete employee details
 export async function updateStoreEmployee(
     id: number,
-    oldDisplayName: string,
-    newDisplayName: string,
-    newRole: string
+    details: {
+        display_name: string;
+        role_category: string;
+        email?: string;
+        phone?: string;
+        password?: string;
+    }
 ) {
-    // Update employee record
-    const { error: empErr } = await supabase
+    const { error } = await supabase
         .from('employees')
-        .update({ display_name: newDisplayName.trim(), role_category: newRole.trim() })
+        .update({
+            display_name: details.display_name.trim(),
+            role_category: details.role_category.trim(),
+            email: details.email?.trim() || null,
+            phone: details.phone?.trim() || null,
+            password: details.password?.trim() || null,
+        })
         .eq('id', id);
 
-    if (empErr) throw new Error(empErr.message);
+    if (error) throw new Error(error.message);
+}
 
-    // Propagate name change to shifts table
-    if (oldDisplayName.trim() !== newDisplayName.trim()) {
-        await supabase
-            .from('store_shifts')
-            .update({ employee_name: newDisplayName.trim() })
-            .eq('employee_name', oldDisplayName.trim());
-    }
+// Delete employee (cascades and removes their shifts automatically)
+export async function deleteStoreEmployee(id: number) {
+    const { error } = await supabase
+        .from('employees')
+        .delete()
+        .eq('id', id);
+
+    if (error) throw new Error(error.message);
 }
