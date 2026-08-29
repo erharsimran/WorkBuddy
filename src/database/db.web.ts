@@ -244,7 +244,8 @@ export async function fetchAllShifts(): Promise<ShiftDbRow[]> {
         employee_id,
         employees (
           id,
-          display_name
+          display_name,
+          phone
         )
       `)
             .in('date', shiftDates);
@@ -256,6 +257,7 @@ export async function fetchAllShifts(): Promise<ShiftDbRow[]> {
                     name: s.employees?.display_name || s.employee_name || 'Staff',
                     startTime: s.start_time,
                     endTime: s.end_time,
+                    phone: s.employees?.phone || null,
                 }));
 
             return {
@@ -264,9 +266,9 @@ export async function fetchAllShifts(): Promise<ShiftDbRow[]> {
                 start_time: row.start_time,
                 end_time: row.end_time,
                 hours: Number(row.hours),
-              coworkers,
-          };
-      });
+                coworkers,
+            };
+        });
   } catch (e) {
         console.error('Error in fetchAllShifts:', e);
       return [];
