@@ -27,14 +27,21 @@ function convertTo24Hour(timeStr: string): string {
 }
 
 function computeShiftHours(startTime: string, endTime: string): number {
+    if (!startTime || !endTime || startTime === '00:00') return 0;
+
     const [sH, sM] = startTime.split(':').map(Number);
     const [eH, eM] = endTime.split(':').map(Number);
     let startMin = sH * 60 + sM;
     let endMin = eH * 60 + eM;
-
     if (endMin < startMin) endMin += 24 * 60;
     const grossHours = (endMin - startMin) / 60;
-    const netHours = grossHours > 5.5 ? grossHours - 0.5 : grossHours;
+    let unpaidBreak = 0;
+    if (grossHours > 10) {
+        unpaidBreak = 1.0; // 60 min unpaid for shifts > 10 hours
+    } else if (grossHours >= 5.0) {
+        unpaidBreak = 0.5; // 30 min unpaid for shifts 5 to 10 hours
+    }
+    const netHours = Math.max(0, grossHours - unpaidBreak);
     return Number(netHours.toFixed(2));
 }
 
