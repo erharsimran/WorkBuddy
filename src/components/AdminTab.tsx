@@ -9,6 +9,7 @@ import {
   Modal,
   Alert,
   Platform,
+  ActivityIndicator,
 } from 'react-native';
 
 export interface EmployeeRecord {
@@ -24,15 +25,19 @@ export interface EmployeeRecord {
 interface Props {
   employees: EmployeeRecord[];
   onUploadRoster: () => void;
+  onViewSchedule: (emp: EmployeeRecord) => void;
   onSaveEmployee: (id: number, details: Partial<EmployeeRecord>) => Promise<void>;
   onDeleteEmployee: (id: number, name: string) => Promise<void>;
+  onArchiveShifts?: () => Promise<void>;
 }
 
 export const AdminTab: React.FC<Props> = ({
   employees,
   onUploadRoster,
+  onViewSchedule,
   onSaveEmployee,
   onDeleteEmployee,
+  onArchiveShifts,
 }) => {
   const [editingEmp, setEditingEmp] = useState<EmployeeRecord | null>(null);
   const [displayName, setDisplayName] = useState('');
@@ -40,6 +45,7 @@ export const AdminTab: React.FC<Props> = ({
   const [email, setEmail] = useState('');
   const [phone, setPhone] = useState('');
   const [password, setPassword] = useState('');
+  const [archiving, setArchiving] = useState(false);
 
   const handleOpenEdit = (emp: EmployeeRecord) => {
     setEditingEmp(emp);
@@ -88,10 +94,21 @@ export const AdminTab: React.FC<Props> = ({
     }
   };
 
+  const handleArchive = async () => {
+    if (!onArchiveShifts) return;
+    setArchiving(true);
+    try {
+      await onArchiveShifts();
+    } finally {
+      setArchiving(false);
+    }
+  };
+
   return (
     <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: 24 }}>
       <Text style={styles.subtitle}>Store Operations</Text>
 
+      {/* Roster Upload Card */}
       <View style={styles.adminActionCard}>
         <Text style={styles.adminCardTitle}>Upload Weekly Store Schedule</Text>
         <Text style={styles.adminCardSub}>
@@ -103,32 +120,61 @@ export const AdminTab: React.FC<Props> = ({
         </TouchableOpacity>
       </View>
 
+      {/* Weekly Shift Archive & Cleanup Card */}
+      {onArchiveShifts && (
+        <View style={[styles.adminActionCard, { marginTop: 12 }]}>
+          <Text style={styles.adminCardTitle}>Archive & Clean Old Shifts</Text>
+          <Text style={styles.adminCardSub}>
+            Summarizes and saves previous week shift hours into the permanent archive table and purges old raw rows to save database storage.
+          </Text>
+
+          <TouchableOpacity
+            style={styles.archiveButton}
+            onPress={handleArchive}
+            disabled={archiving}
+          >
+            {archiving ? (
+              <ActivityIndicator color="#92400e" />
+            ) : (
+              <Text style={styles.archiveButtonText}>📦 Run Weekly Shift Archive</Text>
+            )}
+          </TouchableOpacity>
+        </View>
+      )}
+
       <Text style={[styles.subtitle, { marginTop: 24 }]}>
         Store Employee Directory ({employees.length})
       </Text>
+      <Text style={styles.hintText}>💡 Tap an employee name to inspect their full schedule.</Text>
 
       {employees.length === 0 ? (
         <Text style={styles.emptyText}>No employees registered yet. Upload a roster.</Text>
       ) : (
         employees.map((emp) => (
           <View key={emp.id} style={styles.empCard}>
-            <View style={{ flex: 1, paddingRight: 8 }}>
+            <TouchableOpacity
+              style={{ flex: 1, paddingRight: 8 }}
+              onPress={() => onViewSchedule(emp)}
+              activeOpacity={0.7}
+            >
               <Text style={styles.empNameText}>
                 {emp.display_name} <Text style={styles.empIdBadge}>(ID #{emp.id})</Text>
               </Text>
-              <Text style={styles.empRoleText}>🏷️ {emp.role_category || 'Staff'} • Full: {emp.full_name}</Text>
+              <Text style={styles.empRoleText}>
+                🏷️ {emp.role_category || 'Staff'} • Full: {emp.full_name}
+              </Text>
               {emp.email ? <Text style={styles.empDetailText}>✉️ {emp.email}</Text> : null}
               {emp.phone ? <Text style={styles.empDetailText}>📞 {emp.phone}</Text> : null}
-            </View>
+            </TouchableOpacity>
 
             <TouchableOpacity style={styles.empEditBtn} onPress={() => handleOpenEdit(emp)}>
-              <Text style={styles.empEditBtnText}>✏️ Edit</Text>
+              <Text style={styles.empEditBtnText}>⚙️ Edit</Text>
             </TouchableOpacity>
           </View>
         ))
       )}
 
-      {/* Edit & Delete Employee Modal */}
+      {/* Edit & Delete Modal */}
       <Modal visible={!!editingEmp} animationType="fade" transparent={true}>
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
@@ -154,7 +200,7 @@ export const AdminTab: React.FC<Props> = ({
 
             <View style={styles.modalBtnRow}>
               <TouchableOpacity style={[styles.btn, styles.deleteBtn]} onPress={() => editingEmp && handleDelete(editingEmp)}>
-                <Text style={styles.btnText}>🗑️ Delete</Text>
+                <Text style={styles.deleteBtnText}>🗑️ Delete</Text>
               </TouchableOpacity>
               <TouchableOpacity style={[styles.btn, styles.cancelBtn]} onPress={() => setEditingEmp(null)}>
                 <Text style={styles.btnText}>Cancel</Text>
@@ -171,14 +217,17 @@ export const AdminTab: React.FC<Props> = ({
 };
 
 const styles = StyleSheet.create({
-  subtitle: { fontSize: 18, fontWeight: '700', color: '#1e293b', marginTop: 16, marginBottom: 12 },
+  subtitle: { fontSize: 18, fontWeight: '700', color: '#1e293b', marginTop: 16, marginBottom: 4 },
+  hintText: { fontSize: 12, color: '#64748b', marginBottom: 12 },
   adminActionCard: { backgroundColor: '#ffffff', padding: 18, borderRadius: 14, borderWidth: 1, borderColor: '#cbd5e1', marginBottom: 10 },
   adminCardTitle: { fontSize: 16, fontWeight: '800', color: '#0f172a' },
   adminCardSub: { fontSize: 13, color: '#64748b', marginTop: 4, lineHeight: 18 },
   uploadButton: { backgroundColor: '#2563eb', paddingVertical: 14, borderRadius: 12, alignItems: 'center', marginTop: 12 },
   uploadButtonText: { color: '#ffffff', fontSize: 14, fontWeight: '700' },
+  archiveButton: { backgroundColor: '#fef3c7', borderWidth: 1, borderColor: '#fde68a', paddingVertical: 14, borderRadius: 12, alignItems: 'center', marginTop: 12 },
+  archiveButtonText: { color: '#92400e', fontSize: 14, fontWeight: '700' },
   empCard: { backgroundColor: '#ffffff', padding: 14, borderRadius: 12, marginBottom: 10, borderWidth: 1, borderColor: '#e2e8f0', flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  empNameText: { fontSize: 15, fontWeight: '800', color: '#0f172a' },
+  empNameText: { fontSize: 15, fontWeight: '800', color: '#2563eb' },
   empIdBadge: { fontSize: 12, fontWeight: '600', color: '#64748b' },
   empRoleText: { fontSize: 13, color: '#475569', marginTop: 3 },
   empDetailText: { fontSize: 12, color: '#64748b', marginTop: 2 },
@@ -194,6 +243,7 @@ const styles = StyleSheet.create({
   modalBtnRow: { flexDirection: 'row', gap: 8, marginTop: 14 },
   btn: { flex: 1, paddingVertical: 12, borderRadius: 8, alignItems: 'center' },
   deleteBtn: { backgroundColor: '#fee2e2' },
+  deleteBtnText: { fontWeight: '700', color: '#ef4444', fontSize: 13 },
   cancelBtn: { backgroundColor: '#94a3b8' },
   saveBtn: { backgroundColor: '#2563eb' },
   btnText: { fontWeight: '700', color: '#fff', fontSize: 13 },

@@ -2,6 +2,7 @@ export interface CoworkerShift {
     name: string;
     startTime: string; // e.g. "12:00"
     endTime: string;   // e.g. "21:30"
+    phone?: string | null;
 }
 
 export interface Shift {

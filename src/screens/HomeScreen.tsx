@@ -3,10 +3,8 @@ import {
   StyleSheet,
   Text,
   View,
-  TextInput,
   TouchableOpacity,
   ActivityIndicator,
-  Alert,
   Modal,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -26,7 +24,6 @@ import { setupNotificationChannels } from '../services/notifications';
 import { parseFullStoreRoster } from '../services/gemini';
 import {
   getCurrentUser,
-  loginOrRegister,
   logoutUser,
   getUserHourlyRate,
   setUserHourlyRate,
@@ -34,6 +31,7 @@ import {
   UserProfileDetails,
 } from '../services/auth';
 
+import { LoginScreen } from '../components/LoginScreen';
 import { ScheduleTab } from '../components/ScheduleTab';
 import { WeeklyTab } from '../components/WeeklyTab';
 import { MonthlyTab } from '../components/MonthlyTab';
@@ -42,6 +40,9 @@ import { CoworkersModal } from '../components/CoworkersModal';
 import { EditShiftModal } from '../components/EditShiftModal';
 import { EditRateModal } from '../components/EditRateModal';
 import { UserProfileModal } from '../components/UserProfileModal';
+import { EmployeeScheduleModal } from '../components/EmployeeScheduleModal';
+import { PhoneResetModal } from '../components/PhoneResetModal';
+import { CustomAlertModal, AlertType } from '../components/CustomAlertModal';
 
 type TabType = 'schedule' | 'weekly' | 'monthly' | 'admin';
 
@@ -49,14 +50,10 @@ export default function HomeScreen() {
   const [activeTab, setActiveTab] = useState<TabType>('schedule');
   const [currentUser, setCurrentUser] = useState<string | null>(null);
   const [authLoading, setAuthLoading] = useState<boolean>(true);
-  const [submittingAuth, setSubmittingAuth] = useState<boolean>(false);
-  const [nameInput, setNameInput] = useState('');
-  const [passInput, setPassInput] = useState('');
 
   const [shifts, setShifts] = useState<ShiftDbRow[]>([]);
   const [weeklyList, setWeeklyList] = useState<WeeklySummary[]>([]);
   const [hourlyRate, setHourlyRate] = useState<number>(18.10);
-
   const [uploadingRoster, setUploadingRoster] = useState<boolean>(false);
 
   // Modals
@@ -64,16 +61,51 @@ export default function HomeScreen() {
   const [editingShift, setEditingShift] = useState<ShiftDbRow | null>(null);
   const [isRateModalOpen, setIsRateModalOpen] = useState<boolean>(false);
 
-  // User Profile Modal
+  // User Profile & Phone Reset Modals
   const [userProfile, setUserProfile] = useState<UserProfileDetails | null>(null);
   const [isProfileModalOpen, setIsProfileModalOpen] = useState<boolean>(false);
+  const [isResetModalOpen, setIsResetModalOpen] = useState<boolean>(false);
 
-  // Admin state
+  // Admin Schedule Inspection Modal
+  const [inspectedEmp, setInspectedEmp] = useState<EmployeeRecord | null>(null);
   const [employees, setEmployees] = useState<EmployeeRecord[]>([]);
+
+  // In-app Alert State
+  const [alertConfig, setAlertConfig] = useState<{
+    visible: boolean;
+    type: AlertType;
+    title: string;
+    message: string;
+  }>({
+    visible: false,
+    type: 'info',
+    title: '',
+    message: '',
+  });
+
+  const showAlert = (title: string, message: string, type: AlertType = 'info') => {
+    setAlertConfig({ visible: true, title, message, type });
+  };
 
   const isAdmin = useMemo(() => {
     return currentUser?.toLowerCase().trim().startsWith('harry') ?? false;
   }, [currentUser]);
+
+  const loadUserData = async (username: string) => {
+    const rate = await getUserHourlyRate(username);
+    setHourlyRate(rate);
+    const [savedShifts, savedWeeks] = await Promise.all([
+      fetchAllShifts(),
+      fetchWeeklyHours(),
+    ]);
+    setShifts(savedShifts);
+    setWeeklyList(savedWeeks);
+
+    if (username.toLowerCase().trim().startsWith('harry')) {
+      const empList = await fetchStoreEmployees();
+      setEmployees(empList);
+    }
+  };
 
   useEffect(() => {
     (async () => {
@@ -82,18 +114,7 @@ export default function HomeScreen() {
         const savedUser = await getCurrentUser();
         if (savedUser) {
           setCurrentUser(savedUser);
-          const rate = await getUserHourlyRate(savedUser);
-          setHourlyRate(rate);
-          const [savedShifts, savedWeeks] = await Promise.all([
-            fetchAllShifts(),
-            fetchWeeklyHours(),
-          ]);
-          setShifts(savedShifts);
-          setWeeklyList(savedWeeks);
-          if (savedUser.toLowerCase().trim().startsWith('harry')) {
-            const empList = await fetchStoreEmployees();
-            setEmployees(empList);
-          }
+          await loadUserData(savedUser);
         }
       } catch (err) {
         console.error('Session restore error:', err);
@@ -103,56 +124,9 @@ export default function HomeScreen() {
     })();
   }, []);
 
-  const handleOpenMyProfile = async () => {
-    if (!currentUser) return;
-    const profile = await getCurrentUserProfile(currentUser);
-    setUserProfile(profile);
-    setIsProfileModalOpen(true);
-  };
-
-  const handleProfileUpdated = async (newDisplayName: string) => {
-    setCurrentUser(newDisplayName);
-    const [savedShifts, savedWeeks] = await Promise.all([
-      fetchAllShifts(),
-      fetchWeeklyHours(),
-    ]);
-    setShifts(savedShifts);
-    setWeeklyList(savedWeeks);
-  };
-
-  const handleLogin = async () => {
-    if (!nameInput.trim() || !passInput.trim()) {
-      Alert.alert('Input Error', 'Please enter both your name and password.');
-      return;
-    }
-    setSubmittingAuth(true);
-    try {
-      const success = await loginOrRegister(nameInput, passInput);
-      if (!success) {
-        Alert.alert('Authentication Failed', 'Incorrect password.');
-        setSubmittingAuth(false);
-        return;
-      }
-      const trimmedUser = nameInput.trim();
-      setCurrentUser(trimmedUser);
-      const rate = await getUserHourlyRate(trimmedUser);
-      setHourlyRate(rate);
-
-      const [saved, savedWeeks] = await Promise.all([fetchAllShifts(), fetchWeeklyHours()]);
-      setShifts(saved);
-      setWeeklyList(savedWeeks);
-
-      if (trimmedUser.toLowerCase().startsWith('harry')) {
-        const empList = await fetchStoreEmployees();
-        setEmployees(empList);
-      }
-      setNameInput('');
-      setPassInput('');
-    } catch (err: any) {
-      Alert.alert('Login Error', err.message || 'An error occurred.');
-    } finally {
-      setSubmittingAuth(false);
-    }
+  const handleLoginSuccess = async (userName: string) => {
+    setCurrentUser(userName);
+    await loadUserData(userName);
   };
 
   const handleLogout = async () => {
@@ -164,12 +138,25 @@ export default function HomeScreen() {
     setActiveTab('schedule');
   };
 
+  const handleOpenMyProfile = async () => {
+    if (!currentUser) return;
+    const profile = await getCurrentUserProfile(currentUser);
+    setUserProfile(profile);
+    setIsProfileModalOpen(true);
+  };
+
+  const handleProfileUpdated = async (newDisplayName: string) => {
+    setCurrentUser(newDisplayName);
+    await loadUserData(newDisplayName);
+  };
+
   const handleSaveHourlyRate = async (newRate: number) => {
     if (!currentUser) return;
     await setUserHourlyRate(currentUser, newRate);
     setHourlyRate(newRate);
     const updatedWeeks = await recalculateWeeklyHours();
     setWeeklyList(updatedWeeks);
+    showAlert('Rate Updated', `Base hourly wage updated to $${newRate.toFixed(2)}/hr`, 'success');
   };
 
   const handleSaveShiftEdit = async (updated: ShiftDbRow) => {
@@ -180,6 +167,7 @@ export default function HomeScreen() {
     ]);
     setShifts(refreshedShifts);
     setWeeklyList(refreshedWeeks);
+    showAlert('Shift Updated', 'Your shift changes have been saved.', 'success');
   };
 
   const handleAdminUploadSchedule = async () => {
@@ -203,14 +191,45 @@ export default function HomeScreen() {
       setShifts(updated);
       setWeeklyList(updatedWeeks);
       setEmployees(updatedEmps);
-      Alert.alert('Store Synced', `Processed entire roster for week of ${matrixData.week}.`);
+      showAlert('Store Synced', `Processed entire roster for week of ${matrixData.week}.`, 'success');
     } catch (err: any) {
-      Alert.alert('Processing Error', err.message || 'Failed to process store roster.');
+      showAlert('Processing Error', err.message || 'Failed to process store roster.', 'error');
     } finally {
       setUploadingRoster(false);
     }
   };
+const handleManualArchiveShifts = async () => {
+    try {
+      // Determine domain: fallback to live production URL when running on mobile/local
+      const baseUrl =
+        typeof window !== 'undefined' && window.location.origin.includes('vercel.app')
+          ? window.location.origin
+          : 'https://work-buddy-flame-six.vercel.app';
 
+      const response = await fetch(`${baseUrl}/api/archive-shifts`);
+      const data = await response.json();
+
+      if (data.success) {
+        // Refresh local shifts after purge
+        const [refreshedShifts, refreshedWeeks] = await Promise.all([
+          fetchAllShifts(),
+          fetchWeeklyHours(),
+        ]);
+        setShifts(refreshedShifts);
+        setWeeklyList(refreshedWeeks);
+
+        showAlert(
+          'Archive Complete',
+          data.message || `Archived ${data.archivedCount} member records and cleaned old shifts.`,
+          'success'
+        );
+      } else {
+        showAlert('Archive Error', data.error || 'Failed to archive shifts.', 'error');
+      }
+    } catch (err: any) {
+      showAlert('Network Error', err.message || 'Unable to connect to archive service.', 'error');
+    }
+  };
   const handleSaveEmp = async (id: number, details: Partial<EmployeeRecord>) => {
     try {
       await updateStoreEmployee(id, {
@@ -226,9 +245,9 @@ export default function HomeScreen() {
       ]);
       setEmployees(updatedEmps);
       setShifts(updatedShifts);
-      Alert.alert('Success', 'Employee profile updated.');
+      showAlert('Profile Saved', 'Employee directory information updated.', 'success');
     } catch (err: any) {
-      Alert.alert('Error', err.message || 'Failed to update employee.');
+      showAlert('Save Error', err.message || 'Failed to update employee.', 'error');
     }
   };
 
@@ -241,9 +260,9 @@ export default function HomeScreen() {
       ]);
       setEmployees(updatedEmps);
       setShifts(updatedShifts);
-      Alert.alert('Deleted', `${name} has been removed from the directory.`);
+      showAlert('Employee Removed', `${name} has been removed from the directory.`, 'success');
     } catch (err: any) {
-      Alert.alert('Error', err.message || 'Failed to delete employee.');
+      showAlert('Delete Error', err.message || 'Failed to delete employee.', 'error');
     }
   };
 
@@ -257,50 +276,9 @@ export default function HomeScreen() {
     );
   }
 
+  // Separate Login Screen
   if (!currentUser) {
-    return (
-      <SafeAreaView style={styles.safeArea}>
-        <View style={styles.loginContainer}>
-          <View style={styles.loginBox}>
-            <Text style={styles.title}>WorkBuddy</Text>
-            <Text style={styles.headerSubtitle}>Sign in to access your store schedule</Text>
-            <View style={styles.authCard}>
-              <Text style={styles.inputLabel}>Employee / Your Name</Text>
-              <TextInput
-                style={styles.textInput}
-                placeholder="e.g. Harry"
-                placeholderTextColor="#94a3b8"
-                value={nameInput}
-                onChangeText={setNameInput}
-                autoCapitalize="words"
-                autoCorrect={false}
-              />
-              <Text style={styles.inputLabel}>Password</Text>
-              <TextInput
-                style={styles.textInput}
-                placeholder="••••••••"
-                placeholderTextColor="#94a3b8"
-                value={passInput}
-                onChangeText={setPassInput}
-                secureTextEntry
-                onSubmitEditing={handleLogin}
-              />
-              <TouchableOpacity
-                style={styles.loginSubmitButton}
-                onPress={handleLogin}
-                disabled={submittingAuth}
-              >
-                {submittingAuth ? (
-                  <ActivityIndicator color="#ffffff" />
-                ) : (
-                  <Text style={styles.loginSubmitButtonText}>Sign In / Continue</Text>
-                )}
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
-      </SafeAreaView>
-    );
+    return <LoginScreen onLoginSuccess={handleLoginSuccess} />;
   }
 
   return (
@@ -350,17 +328,22 @@ export default function HomeScreen() {
           <AdminTab
             employees={employees}
             onUploadRoster={handleAdminUploadSchedule}
+            onViewSchedule={(emp) => setInspectedEmp(emp)}
             onSaveEmployee={handleSaveEmp}
             onDeleteEmployee={handleDeleteEmp}
+            onArchiveShifts={handleManualArchiveShifts}
           />
         )}
 
+        {/* Modals */}
         <CoworkersModal shift={selectedShift} onClose={() => setSelectedShift(null)} />
+
         <EditShiftModal
           shift={editingShift}
           onClose={() => setEditingShift(null)}
           onSave={handleSaveShiftEdit}
         />
+
         <EditRateModal
           visible={isRateModalOpen}
           currentRate={hourlyRate}
@@ -368,15 +351,39 @@ export default function HomeScreen() {
           onSave={handleSaveHourlyRate}
         />
 
-        {/* User Self-Profile Modal */}
         <UserProfileModal
           visible={isProfileModalOpen}
           profile={userProfile}
           onClose={() => setIsProfileModalOpen(false)}
           onUpdated={handleProfileUpdated}
+          onTriggerResetPassword={() => {
+            setIsProfileModalOpen(false);
+            setIsResetModalOpen(true);
+          }}
         />
 
-        {/* Fullscreen Loader */}
+        <EmployeeScheduleModal
+          employee={inspectedEmp}
+          onClose={() => setInspectedEmp(null)}
+        />
+
+        <PhoneResetModal
+          visible={isResetModalOpen}
+          initialIdentifier={currentUser}
+          onClose={() => setIsResetModalOpen(false)}
+          onSuccess={() => setIsResetModalOpen(false)}
+        />
+
+        {/* Global in-app custom alert */}
+        <CustomAlertModal
+          visible={alertConfig.visible}
+          type={alertConfig.type}
+          title={alertConfig.title}
+          message={alertConfig.message}
+          onClose={() => setAlertConfig((prev) => ({ ...prev, visible: false }))}
+        />
+
+        {/* Fullscreen OCR / AI Uploading Overlay */}
         <Modal visible={uploadingRoster} transparent={true} animationType="fade">
           <View style={styles.fullscreenLoaderOverlay}>
             <View style={styles.loaderCard}>
@@ -452,35 +459,6 @@ const styles = StyleSheet.create({
     borderRadius: 8,
   },
   logoutBtnText: { color: '#ef4444', fontWeight: '700', fontSize: 13 },
-  loginContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 20 },
-  loginBox: { width: '100%', maxWidth: 400 },
-  authCard: {
-    backgroundColor: '#ffffff',
-    padding: 24,
-    borderRadius: 18,
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
-    marginTop: 18,
-  },
-  inputLabel: { fontSize: 14, fontWeight: '700', color: '#334155', marginBottom: 6, marginTop: 12 },
-  textInput: {
-    borderWidth: 1,
-    borderColor: '#cbd5e1',
-    borderRadius: 10,
-    padding: 12,
-    fontSize: 16,
-    backgroundColor: '#f8fafc',
-    color: '#0f172a',
-  },
-  loginSubmitButton: {
-    backgroundColor: '#2563eb',
-    borderRadius: 12,
-    paddingVertical: 16,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginTop: 22,
-  },
-  loginSubmitButtonText: { color: '#ffffff', fontSize: 16, fontWeight: '700' },
   fullscreenLoaderOverlay: {
     flex: 1,
     backgroundColor: 'rgba(15, 23, 42, 0.75)',
@@ -495,6 +473,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     width: '100%',
     maxWidth: 340,
+    shadowColor: '#000',
+    shadowOpacity: 0.15,
+    shadowRadius: 12,
+    elevation: 8,
   },
   loaderTitle: { fontSize: 17, fontWeight: '800', color: '#0f172a', marginTop: 16 },
   loaderSub: { fontSize: 13, color: '#64748b', textAlign: 'center', marginTop: 6, lineHeight: 18 },

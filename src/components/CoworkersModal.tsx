@@ -1,5 +1,15 @@
 import React, { useMemo } from 'react';
-import { StyleSheet, Text, View, Modal, ScrollView, TouchableOpacity } from 'react-native';
+import {
+  StyleSheet,
+  Text,
+  View,
+  Modal,
+  ScrollView,
+  TouchableOpacity,
+  Linking,
+  Alert,
+  Platform,
+} from 'react-native';
 import { ShiftDbRow, CoworkerShift } from '../types';
 
 interface Props {
@@ -32,6 +42,26 @@ export const CoworkersModal: React.FC<Props> = ({ shift, onClose }) => {
     });
   }, [shift]);
 
+  const handleMakeCall = (phone: string, name: string) => {
+    const cleanPhone = phone.replace(/[^0-9+]/g, '');
+    if (!cleanPhone) {
+      const msg = `No valid phone number found for ${name}.`;
+      Platform.OS === 'web' ? window.alert(msg) : Alert.alert('Unavailable', msg);
+      return;
+    }
+    Linking.openURL(`tel:${cleanPhone}`);
+  };
+
+  const handleSendSMS = (phone: string, name: string) => {
+    const cleanPhone = phone.replace(/[^0-9+]/g, '');
+    if (!cleanPhone) {
+      const msg = `No valid phone number found for ${name}.`;
+      Platform.OS === 'web' ? window.alert(msg) : Alert.alert('Unavailable', msg);
+      return;
+    }
+    Linking.openURL(`sms:${cleanPhone}`);
+  };
+
   return (
     <Modal visible={!!shift} animationType="fade" transparent={true}>
       <View style={styles.modalOverlay}>
@@ -39,25 +69,50 @@ export const CoworkersModal: React.FC<Props> = ({ shift, onClose }) => {
           <Text style={styles.modalTitle}>Daily Coworker Schedule</Text>
           <Text style={styles.modalSub}>{shift?.date || ''}</Text>
 
-          <ScrollView style={{ maxHeight: 340, marginVertical: 14 }}>
+          <ScrollView style={{ maxHeight: 380, marginVertical: 14 }}>
             {sortedCoworkers.length > 0 ? (
               sortedCoworkers.map((c: CoworkerShift | string, idx: number) => {
                 const isObject = typeof c === 'object' && c !== null;
                 const name = isObject ? c.name : c;
                 const startTime = isObject ? c.startTime : '';
                 const endTime = isObject ? c.endTime : '';
+                const phone = isObject ? c.phone : null;
                 const timeRange = startTime && endTime ? `${startTime} - ${endTime}` : null;
                 const shiftMeta = getShiftTag(startTime, endTime);
 
                 return (
-                  <View key={idx} style={styles.coworkerRow}>
-                    <View style={{ flex: 1, paddingRight: 8 }}>
-                      <Text style={styles.coworkerNameText}>• {name}</Text>
-                      {timeRange ? <Text style={styles.coworkerSubTime}>⏰ {timeRange}</Text> : null}
+                  <View key={idx} style={styles.coworkerCard}>
+                    <View style={styles.coworkerTopRow}>
+                      <View style={{ flex: 1, paddingRight: 8 }}>
+                        <Text style={styles.coworkerNameText}>{name}</Text>
+                        {timeRange ? <Text style={styles.coworkerSubTime}>⏰ {timeRange}</Text> : null}
+                      </View>
+
+                      {timeRange ? (
+                        <View style={[styles.shiftTagBadge, styles[`${shiftMeta.type}Badge`]]}>
+                          <Text style={[styles.shiftTagText, styles[`${shiftMeta.type}Text`]]}>
+                            {shiftMeta.tag}
+                          </Text>
+                        </View>
+                      ) : null}
                     </View>
-                    {timeRange ? (
-                      <View style={[styles.shiftTagBadge, styles[`${shiftMeta.type}Badge`]]}>
-                        <Text style={[styles.shiftTagText, styles[`${shiftMeta.type}Text`]]}>{shiftMeta.tag}</Text>
+
+                    {/* Direct Contact Actions */}
+                    {phone ? (
+                      <View style={styles.contactActionsRow}>
+                        <TouchableOpacity
+                          style={[styles.contactBtn, styles.callBtn]}
+                          onPress={() => handleMakeCall(phone, name)}
+                        >
+                          <Text style={styles.callBtnText}>📞 Call</Text>
+                        </TouchableOpacity>
+
+                        <TouchableOpacity
+                          style={[styles.contactBtn, styles.smsBtn]}
+                          onPress={() => handleSendSMS(phone, name)}
+                        >
+                          <Text style={styles.smsBtnText}>💬 SMS</Text>
+                        </TouchableOpacity>
                       </View>
                     ) : null}
                   </View>
@@ -78,13 +133,29 @@ export const CoworkersModal: React.FC<Props> = ({ shift, onClose }) => {
 };
 
 const styles = StyleSheet.create({
-  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', padding: 20 },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    padding: 20,
+  },
   modalContent: { backgroundColor: '#fff', borderRadius: 16, padding: 20 },
   modalTitle: { fontSize: 18, fontWeight: '800', color: '#0f172a' },
   modalSub: { fontSize: 13, color: '#64748b', marginTop: 2 },
-  coworkerRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: '#f1f5f9' },
+
+  coworkerCard: {
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f1f5f9',
+  },
+  coworkerTopRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
   coworkerNameText: { fontSize: 15, color: '#0f172a', fontWeight: '700' },
   coworkerSubTime: { fontSize: 12, color: '#64748b', fontWeight: '500', marginTop: 2 },
+
   shiftTagBadge: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6 },
   shiftTagText: { fontSize: 11, fontWeight: '800', textTransform: 'uppercase' },
   openBadge: { backgroundColor: '#fef3c7' },
@@ -95,7 +166,45 @@ const styles = StyleSheet.create({
   closeText: { color: '#b91c1c' },
   otherBadge: { backgroundColor: '#f1f5f9' },
   otherText: { color: '#475569' },
+
+  contactActionsRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginTop: 8,
+  },
+  contactBtn: {
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    borderWidth: 1,
+    alignItems: 'center',
+  },
+  callBtn: {
+    backgroundColor: '#dcfce7',
+    borderColor: '#bbf7d0',
+  },
+  callBtnText: {
+    color: '#15803d',
+    fontWeight: '700',
+    fontSize: 12,
+  },
+  smsBtn: {
+    backgroundColor: '#f1f5f9',
+    borderColor: '#e2e8f0',
+  },
+  smsBtnText: {
+    color: '#334155',
+    fontWeight: '700',
+    fontSize: 12,
+  },
+
   noCoworkersText: { fontSize: 14, color: '#94a3b8', fontStyle: 'italic', paddingVertical: 8 },
-  closeBtn: { backgroundColor: '#0f172a', paddingVertical: 12, borderRadius: 8, alignItems: 'center', marginTop: 10 },
+  closeBtn: {
+    backgroundColor: '#0f172a',
+    paddingVertical: 12,
+    borderRadius: 8,
+    alignItems: 'center',
+    marginTop: 10,
+  },
   closeBtnText: { color: '#fff', fontWeight: '700' },
 });

@@ -244,7 +244,8 @@ export async function fetchAllShifts(): Promise<ShiftDbRow[]> {
         employee_id,
         employees (
           id,
-          display_name
+          display_name,
+          phone
         )
       `)
             .in('date', shiftDates);
@@ -256,6 +257,7 @@ export async function fetchAllShifts(): Promise<ShiftDbRow[]> {
                     name: s.employees?.display_name || s.employee_name || 'Staff',
                     startTime: s.start_time,
                     endTime: s.end_time,
+                    phone: s.employees?.phone || null,
                 }));
 
             return {
@@ -264,9 +266,9 @@ export async function fetchAllShifts(): Promise<ShiftDbRow[]> {
                 start_time: row.start_time,
                 end_time: row.end_time,
                 hours: Number(row.hours),
-              coworkers,
-          };
-      });
+                coworkers,
+            };
+        });
   } catch (e) {
         console.error('Error in fetchAllShifts:', e);
       return [];
@@ -389,4 +391,27 @@ export async function deleteStoreEmployee(id: number) {
         .eq('id', id);
 
     if (error) throw new Error(error.message);
+}
+// Fetch shifts for a specific employee ID
+export async function fetchShiftsByEmployeeId(employeeId: number): Promise<ShiftDbRow[]> {
+    try {
+        const { data: userShifts, error } = await supabase
+            .from('store_shifts')
+            .select('*')
+            .eq('employee_id', employeeId)
+            .order('date', { ascending: true });
+
+        if (error || !userShifts) return [];
+
+        return userShifts.map((row) => ({
+            id: row.id,
+            date: row.date,
+            start_time: row.start_time,
+            end_time: row.end_time,
+            hours: Number(row.hours),
+        }));
+    } catch (e) {
+        console.error('Error in fetchShiftsByEmployeeId:', e);
+        return [];
+    }
 }
