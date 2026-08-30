@@ -43,8 +43,9 @@ import { UserProfileModal } from '../components/UserProfileModal';
 import { EmployeeScheduleModal } from '../components/EmployeeScheduleModal';
 import { PhoneResetModal } from '../components/PhoneResetModal';
 import { CustomAlertModal, AlertType } from '../components/CustomAlertModal';
+import { MarketplaceTab } from '../components/MarketplaceTab';
 
-type TabType = 'schedule' | 'weekly' | 'monthly' | 'admin';
+type TabType = 'schedule' | 'weekly' | 'monthly' | 'admin' | 'marketplace';
 
 export default function HomeScreen() {
   const [activeTab, setActiveTab] = useState<TabType>('schedule');
@@ -334,7 +335,14 @@ const handleManualArchiveShifts = async () => {
             onArchiveShifts={handleManualArchiveShifts}
           />
         )}
-
+       {activeTab === 'marketplace' && (
+        <MarketplaceTab
+          currentUser={currentUser}
+          isAdmin={isAdmin}
+          myShifts={shifts} // Your existing Shift[] array for the active user
+          onShowAlert={showAlert}
+        />
+      )}
         {/* Modals */}
         <CoworkersModal shift={selectedShift} onClose={() => setSelectedShift(null)} />
 
@@ -415,6 +423,12 @@ const handleManualArchiveShifts = async () => {
           <Text style={styles.tabIcon}>📊</Text>
           <Text style={[styles.tabLabel, activeTab === 'monthly' && styles.activeTabLabel]}>
             Monthly
+          </Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.tabItem} onPress={() => setActiveTab('marketplace')}>
+          <Text style={styles.tabIcon}>🔄</Text>
+          <Text style={[styles.tabLabel, activeTab === 'marketplace' && styles.activeTabLabel]}>
+            Swaps
           </Text>
         </TouchableOpacity>
         {isAdmin && (

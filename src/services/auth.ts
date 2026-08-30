@@ -19,6 +19,7 @@ export interface UserProfileDetails {
     email?: string;
     phone?: string;
     password?: string;
+    role_category?: string;
 }
 
 // ==========================================
@@ -121,7 +122,7 @@ export async function getCurrentUserProfile(username: string): Promise<UserProfi
     const cleanUser = username.trim().toLowerCase();
     const { data, error } = await supabase
         .from('employees')
-        .select('id, full_name, display_name, email, phone, password')
+        .select('id, full_name, display_name, email, phone, password,role_category')
         .or(`display_name.ilike.${cleanUser},full_name.ilike.${cleanUser}`)
         .limit(1)
         .maybeSingle();
