@@ -8,3 +8,5 @@ ios/
 .vscode/
 .vercel/
 package-lock.json
+dist/
+

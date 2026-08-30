@@ -44,6 +44,7 @@ import { EmployeeScheduleModal } from '../components/EmployeeScheduleModal';
 import { PhoneResetModal } from '../components/PhoneResetModal';
 import { CustomAlertModal, AlertType } from '../components/CustomAlertModal';
 import { MarketplaceTab } from '../components/MarketplaceTab';
+import { NotificationCenterModal } from '../components/NotificationCenterModal';
 
 type TabType = 'schedule' | 'weekly' | 'monthly' | 'admin' | 'marketplace';
 
@@ -84,6 +85,16 @@ export default function HomeScreen() {
     message: '',
   });
 
+  useEffect(() => {
+  async function loadProfile() {
+    if (currentUser) {
+      const profile = await getCurrentUserProfile(currentUser);
+      setUserProfile(profile);
+    }
+  }
+  loadProfile();
+}, [currentUser]);
+
   const showAlert = (title: string, message: string, type: AlertType = 'info') => {
     setAlertConfig({ visible: true, title, message, type });
   };
@@ -108,6 +119,37 @@ export default function HomeScreen() {
     }
   };
 
+  // notifications 
+const [showNotifications, setShowNotifications] = useState(false);
+const [unreadCount, setUnreadCount] = useState(0);
+
+const fetchUnreadCount = async () => {
+  if (!userProfile?.id) return;
+  try {
+    const res = await fetch(`/api/notifications?action=list&userId=${userProfile.id}`);
+    const data = await res.json();
+    if (data.success) {
+      setUnreadCount(data.unreadCount || 0);
+    }
+  } catch (err) {
+    console.error(err);
+  }
+};
+
+  useEffect(() => {
+  async function loadProfile() {
+    if (currentUser) {
+      const profile = await getCurrentUserProfile(currentUser);
+      setUserProfile(profile);
+    }
+  }
+  loadProfile();
+  }, [currentUser]);
+  
+  
+useEffect(() => {
+  fetchUnreadCount();
+}, [userProfile?.id]);
   useEffect(() => {
     (async () => {
       try {
@@ -285,24 +327,45 @@ const handleManualArchiveShifts = async () => {
   return (
     <SafeAreaView style={styles.safeArea}>
       <View style={styles.container}>
-        {/* Header with Profile Edit & Logout */}
-        <View style={styles.headerRow}>
-          <View>
-            <Text style={styles.title}>WorkBuddy</Text>
-            <Text style={styles.headerSubtitle}>
-              Logged in as {currentUser} {isAdmin ? '👑 (Admin)' : ''}
-            </Text>
-          </View>
+  {/* Header with Profile Edit, Notifications & Logout */}
+  <View style={styles.headerRow}>
+    <View>
+      <Text style={styles.title}>WorkBuddy</Text>
+      <Text style={styles.headerSubtitle}>
+        Logged in as {currentUser} {isAdmin ? '👑 (Admin)' : ''}
+      </Text>
+    </View>
 
-          <View style={styles.headerButtonsRow}>
-            <TouchableOpacity style={styles.profileBtn} onPress={handleOpenMyProfile}>
-              <Text style={styles.profileBtnText}>⚙️ Profile</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.logoutBtn} onPress={handleLogout}>
-              <Text style={styles.logoutBtnText}>Logout</Text>
-            </TouchableOpacity>
-          </View>
+        <View style={styles.headerButtonsRow}>
+          {/* Notification Bell with Badge */}
+          <TouchableOpacity
+            style={styles.bellBtn}
+            onPress={() => setShowNotifications(true)}
+          >
+            <Text style={styles.bellIcon}>🔔</Text>
+            {unreadCount > 0 && (
+              <View style={styles.badge}>
+                <Text style={styles.badgeText}>
+                  {unreadCount > 9 ? '9+' : unreadCount}
+                </Text>
+              </View>
+            )}
+          </TouchableOpacity>
+{/* Notification Modal */}
+<NotificationCenterModal
+  visible={showNotifications}
+  userId={userProfile?.id}
+  onClose={() => setShowNotifications(false)}
+  onRefreshUnread={fetchUnreadCount}
+/>
+          <TouchableOpacity style={styles.profileBtn} onPress={handleOpenMyProfile}>
+            <Text style={styles.profileBtnText}>⚙️ Profile</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.logoutBtn} onPress={handleLogout}>
+            <Text style={styles.logoutBtnText}>Logout</Text>
+          </TouchableOpacity>
         </View>
+      </View>
 
         {activeTab === 'schedule' && (
           <ScheduleTab
@@ -507,4 +570,32 @@ const styles = StyleSheet.create({
   tabIcon: { fontSize: 20, marginBottom: 3 },
   tabLabel: { fontSize: 12, fontWeight: '600', color: '#64748b' },
   activeTabLabel: { color: '#2563eb', fontWeight: '800' },
+  bellBtn: {
+  position: 'relative',
+  padding: 8,
+  marginRight: 4,
+  justifyContent: 'center',
+  alignItems: 'center',
+},
+bellIcon: {
+  fontSize: 18,
+},
+badge: {
+  position: 'absolute',
+  top: 2,
+  right: 2,
+  backgroundColor: '#ef4444',
+  borderRadius: 9,
+  minWidth: 18,
+  height: 18,
+  justifyContent: 'center',
+  alignItems: 'center',
+  paddingHorizontal: 4,
+},
+badgeText: {
+  color: '#ffffff',
+  fontSize: 10,
+  fontWeight: '800',
+},
 });
+
