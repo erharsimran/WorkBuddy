@@ -33,8 +33,7 @@ import {
 
 import { LoginScreen } from '../components/LoginScreen';
 import { ScheduleTab } from '../components/ScheduleTab';
-import { WeeklyTab } from '../components/WeeklyTab';
-import { MonthlyTab } from '../components/MonthlyTab';
+import { MoneyTab } from '../components/MoneyTab';
 import { AdminTab, EmployeeRecord } from '../components/AdminTab';
 import { CoworkersModal } from '../components/CoworkersModal';
 import { EditShiftModal } from '../components/EditShiftModal';
@@ -46,7 +45,7 @@ import { CustomAlertModal, AlertType } from '../components/CustomAlertModal';
 import { MarketplaceTab } from '../components/MarketplaceTab';
 import { NotificationCenterModal } from '../components/NotificationCenterModal';
 
-type TabType = 'schedule' | 'weekly' | 'monthly' | 'admin' | 'marketplace';
+type TabType = 'schedule' | 'money' | 'admin' | 'marketplace';
 
 export default function HomeScreen() {
   const [activeTab, setActiveTab] = useState<TabType>('schedule');
@@ -68,6 +67,10 @@ export default function HomeScreen() {
   const [isProfileModalOpen, setIsProfileModalOpen] = useState<boolean>(false);
   const [isResetModalOpen, setIsResetModalOpen] = useState<boolean>(false);
 
+  // Notifications State
+  const [showNotifications, setShowNotifications] = useState<boolean>(false);
+  const [unreadCount, setUnreadCount] = useState<number>(0);
+
   // Admin Schedule Inspection Modal
   const [inspectedEmp, setInspectedEmp] = useState<EmployeeRecord | null>(null);
   const [employees, setEmployees] = useState<EmployeeRecord[]>([]);
@@ -85,16 +88,6 @@ export default function HomeScreen() {
     message: '',
   });
 
-  useEffect(() => {
-  async function loadProfile() {
-    if (currentUser) {
-      const profile = await getCurrentUserProfile(currentUser);
-      setUserProfile(profile);
-    }
-  }
-  loadProfile();
-}, [currentUser]);
-
   const showAlert = (title: string, message: string, type: AlertType = 'info') => {
     setAlertConfig({ visible: true, title, message, type });
   };
@@ -106,12 +99,14 @@ export default function HomeScreen() {
   const loadUserData = async (username: string) => {
     const rate = await getUserHourlyRate(username);
     setHourlyRate(rate);
-    const [savedShifts, savedWeeks] = await Promise.all([
+    const [savedShifts, savedWeeks, profile] = await Promise.all([
       fetchAllShifts(),
       fetchWeeklyHours(),
+      getCurrentUserProfile(username),
     ]);
     setShifts(savedShifts);
     setWeeklyList(savedWeeks);
+    setUserProfile(profile);
 
     if (username.toLowerCase().trim().startsWith('harry')) {
       const empList = await fetchStoreEmployees();
@@ -119,37 +114,19 @@ export default function HomeScreen() {
     }
   };
 
-  // notifications 
-const [showNotifications, setShowNotifications] = useState(false);
-const [unreadCount, setUnreadCount] = useState(0);
-
-const fetchUnreadCount = async () => {
-  if (!userProfile?.id) return;
-  try {
-    const res = await fetch(`/api/notifications?action=list&userId=${userProfile.id}`);
-    const data = await res.json();
-    if (data.success) {
-      setUnreadCount(data.unreadCount || 0);
+  const fetchUnreadCount = async () => {
+    if (!userProfile?.id) return;
+    try {
+      const res = await fetch(`/api/notifications?action=list&userId=${userProfile.id}`);
+      const data = await res.json();
+      if (data.success) {
+        setUnreadCount(data.unreadCount || 0);
+      }
+    } catch (err) {
+      console.error('Fetch unread notifications error:', err);
     }
-  } catch (err) {
-    console.error(err);
-  }
-};
+  };
 
-  useEffect(() => {
-  async function loadProfile() {
-    if (currentUser) {
-      const profile = await getCurrentUserProfile(currentUser);
-      setUserProfile(profile);
-    }
-  }
-  loadProfile();
-  }, [currentUser]);
-  
-  
-useEffect(() => {
-  fetchUnreadCount();
-}, [userProfile?.id]);
   useEffect(() => {
     (async () => {
       try {
@@ -167,6 +144,12 @@ useEffect(() => {
     })();
   }, []);
 
+  useEffect(() => {
+    if (userProfile?.id) {
+      fetchUnreadCount();
+    }
+  }, [userProfile?.id]);
+
   const handleLoginSuccess = async (userName: string) => {
     setCurrentUser(userName);
     await loadUserData(userName);
@@ -175,6 +158,7 @@ useEffect(() => {
   const handleLogout = async () => {
     await logoutUser();
     setCurrentUser(null);
+    setUserProfile(null);
     setShifts([]);
     setWeeklyList([]);
     setEmployees([]);
@@ -241,9 +225,9 @@ useEffect(() => {
       setUploadingRoster(false);
     }
   };
-const handleManualArchiveShifts = async () => {
+
+  const handleManualArchiveShifts = async () => {
     try {
-      // Determine domain: fallback to live production URL when running on mobile/local
       const baseUrl =
         typeof window !== 'undefined' && window.location.origin.includes('vercel.app')
           ? window.location.origin
@@ -253,7 +237,6 @@ const handleManualArchiveShifts = async () => {
       const data = await response.json();
 
       if (data.success) {
-        // Refresh local shifts after purge
         const [refreshedShifts, refreshedWeeks] = await Promise.all([
           fetchAllShifts(),
           fetchWeeklyHours(),
@@ -273,6 +256,7 @@ const handleManualArchiveShifts = async () => {
       showAlert('Network Error', err.message || 'Unable to connect to archive service.', 'error');
     }
   };
+
   const handleSaveEmp = async (id: number, details: Partial<EmployeeRecord>) => {
     try {
       await updateStoreEmployee(id, {
@@ -319,7 +303,6 @@ const handleManualArchiveShifts = async () => {
     );
   }
 
-  // Separate Login Screen
   if (!currentUser) {
     return <LoginScreen onLoginSuccess={handleLoginSuccess} />;
   }
@@ -327,46 +310,41 @@ const handleManualArchiveShifts = async () => {
   return (
     <SafeAreaView style={styles.safeArea}>
       <View style={styles.container}>
-  {/* Header with Profile Edit, Notifications & Logout */}
-  <View style={styles.headerRow}>
-    <View>
-      <Text style={styles.title}>WorkBuddy</Text>
-      <Text style={styles.headerSubtitle}>
-        Logged in as {currentUser} {isAdmin ? '👑 (Admin)' : ''}
-      </Text>
-    </View>
+        {/* Header with Profile Edit, Notifications & Logout */}
+        <View style={styles.headerRow}>
+          <View>
+            <Text style={styles.title}>WorkBuddy</Text>
+            <Text style={styles.headerSubtitle}>
+              Logged in as {currentUser} {isAdmin ? '👑 (Admin)' : ''}
+            </Text>
+          </View>
 
-        <View style={styles.headerButtonsRow}>
-          {/* Notification Bell with Badge */}
-          <TouchableOpacity
-            style={styles.bellBtn}
-            onPress={() => setShowNotifications(true)}
-          >
-            <Text style={styles.bellIcon}>🔔</Text>
-            {unreadCount > 0 && (
-              <View style={styles.badge}>
-                <Text style={styles.badgeText}>
-                  {unreadCount > 9 ? '9+' : unreadCount}
-                </Text>
-              </View>
-            )}
-          </TouchableOpacity>
-{/* Notification Modal */}
-<NotificationCenterModal
-  visible={showNotifications}
-  userId={userProfile?.id}
-  onClose={() => setShowNotifications(false)}
-  onRefreshUnread={fetchUnreadCount}
-/>
-          <TouchableOpacity style={styles.profileBtn} onPress={handleOpenMyProfile}>
-            <Text style={styles.profileBtnText}>⚙️ Profile</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.logoutBtn} onPress={handleLogout}>
-            <Text style={styles.logoutBtnText}>Logout</Text>
-          </TouchableOpacity>
+          <View style={styles.headerButtonsRow}>
+            {/* Notification Bell with Badge */}
+            <TouchableOpacity
+              style={styles.bellBtn}
+              onPress={() => setShowNotifications(true)}
+            >
+              <Text style={styles.bellIcon}>🔔</Text>
+              {unreadCount > 0 && (
+                <View style={styles.badge}>
+                  <Text style={styles.badgeText}>
+                    {unreadCount > 9 ? '9+' : unreadCount}
+                  </Text>
+                </View>
+              )}
+            </TouchableOpacity>
+
+            <TouchableOpacity style={styles.profileBtn} onPress={handleOpenMyProfile}>
+              <Text style={styles.profileBtnText}>⚙️ Profile</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.logoutBtn} onPress={handleLogout}>
+              <Text style={styles.logoutBtnText}>Logout</Text>
+            </TouchableOpacity>
+          </View>
         </View>
-      </View>
 
+        {/* Tab Views */}
         {activeTab === 'schedule' && (
           <ScheduleTab
             shifts={shifts}
@@ -376,16 +354,22 @@ const handleManualArchiveShifts = async () => {
           />
         )}
 
-        {activeTab === 'weekly' && (
-          <WeeklyTab
+        {activeTab === 'money' && (
+          <MoneyTab
             weeklyList={weeklyList}
+            shifts={shifts}
             hourlyRate={hourlyRate}
             onOpenRateModal={() => setIsRateModalOpen(true)}
           />
         )}
 
-        {activeTab === 'monthly' && (
-          <MonthlyTab shifts={shifts} hourlyRate={hourlyRate} />
+        {activeTab === 'marketplace' && (
+          <MarketplaceTab
+            currentUser={currentUser}
+            isAdmin={isAdmin}
+            myShifts={shifts}
+            onShowAlert={showAlert}
+          />
         )}
 
         {activeTab === 'admin' && isAdmin && (
@@ -398,15 +382,15 @@ const handleManualArchiveShifts = async () => {
             onArchiveShifts={handleManualArchiveShifts}
           />
         )}
-       {activeTab === 'marketplace' && (
-        <MarketplaceTab
-          currentUser={currentUser}
-          isAdmin={isAdmin}
-          myShifts={shifts} // Your existing Shift[] array for the active user
-          onShowAlert={showAlert}
-        />
-      )}
+
         {/* Modals */}
+        <NotificationCenterModal
+          visible={showNotifications}
+          userId={userProfile?.id}
+          onClose={() => setShowNotifications(false)}
+          onRefreshUnread={fetchUnreadCount}
+        />
+
         <CoworkersModal shift={selectedShift} onClose={() => setSelectedShift(null)} />
 
         <EditShiftModal
@@ -445,7 +429,6 @@ const handleManualArchiveShifts = async () => {
           onSuccess={() => setIsResetModalOpen(false)}
         />
 
-        {/* Global in-app custom alert */}
         <CustomAlertModal
           visible={alertConfig.visible}
           type={alertConfig.type}
@@ -468,7 +451,7 @@ const handleManualArchiveShifts = async () => {
         </Modal>
       </View>
 
-      {/* Navigation */}
+      {/* Bottom Navigation Bar */}
       <View style={styles.bottomTabBar}>
         <TouchableOpacity style={styles.tabItem} onPress={() => setActiveTab('schedule')}>
           <Text style={styles.tabIcon}>📅</Text>
@@ -476,16 +459,10 @@ const handleManualArchiveShifts = async () => {
             Schedule
           </Text>
         </TouchableOpacity>
-        <TouchableOpacity style={styles.tabItem} onPress={() => setActiveTab('weekly')}>
-          <Text style={styles.tabIcon}>⏱️</Text>
-          <Text style={[styles.tabLabel, activeTab === 'weekly' && styles.activeTabLabel]}>
-            Weekly
-          </Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={styles.tabItem} onPress={() => setActiveTab('monthly')}>
-          <Text style={styles.tabIcon}>📊</Text>
-          <Text style={[styles.tabLabel, activeTab === 'monthly' && styles.activeTabLabel]}>
-            Monthly
+        <TouchableOpacity style={styles.tabItem} onPress={() => setActiveTab('money')}>
+          <Text style={styles.tabIcon}>💰</Text>
+          <Text style={[styles.tabLabel, activeTab === 'money' && styles.activeTabLabel]}>
+            Money
           </Text>
         </TouchableOpacity>
         <TouchableOpacity style={styles.tabItem} onPress={() => setActiveTab('marketplace')}>
@@ -520,6 +497,33 @@ const styles = StyleSheet.create({
   headerButtonsRow: { flexDirection: 'row', gap: 8, alignItems: 'center' },
   title: { fontSize: 26, fontWeight: '800', color: '#0f172a' },
   headerSubtitle: { fontSize: 13, color: '#64748b', marginTop: 2 },
+  bellBtn: {
+    position: 'relative',
+    padding: 8,
+    marginRight: 4,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  bellIcon: {
+    fontSize: 18,
+  },
+  badge: {
+    position: 'absolute',
+    top: 2,
+    right: 2,
+    backgroundColor: '#ef4444',
+    borderRadius: 9,
+    minWidth: 18,
+    height: 18,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 4,
+  },
+  badgeText: {
+    color: '#ffffff',
+    fontSize: 10,
+    fontWeight: '800',
+  },
   profileBtn: {
     backgroundColor: '#f1f5f9',
     paddingVertical: 8,
@@ -570,32 +574,4 @@ const styles = StyleSheet.create({
   tabIcon: { fontSize: 20, marginBottom: 3 },
   tabLabel: { fontSize: 12, fontWeight: '600', color: '#64748b' },
   activeTabLabel: { color: '#2563eb', fontWeight: '800' },
-  bellBtn: {
-  position: 'relative',
-  padding: 8,
-  marginRight: 4,
-  justifyContent: 'center',
-  alignItems: 'center',
-},
-bellIcon: {
-  fontSize: 18,
-},
-badge: {
-  position: 'absolute',
-  top: 2,
-  right: 2,
-  backgroundColor: '#ef4444',
-  borderRadius: 9,
-  minWidth: 18,
-  height: 18,
-  justifyContent: 'center',
-  alignItems: 'center',
-  paddingHorizontal: 4,
-},
-badgeText: {
-  color: '#ffffff',
-  fontSize: 10,
-  fontWeight: '800',
-},
 });
-
