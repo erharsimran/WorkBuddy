@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   StyleSheet,
   Text,
@@ -6,6 +6,8 @@ import {
   TouchableOpacity,
   ActivityIndicator,
   Modal,
+  ScrollView,
+  Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import * as ImagePicker from 'expo-image-picker';
@@ -57,9 +59,11 @@ export default function HomeScreen() {
   const [hourlyRate, setHourlyRate] = useState<number>(18.10);
   const [uploadingRoster, setUploadingRoster] = useState<boolean>(false);
 
-  // Retry state for roster uploads
+  // Retry state and live console terminal logs
   const [lastRosterBase64, setLastRosterBase64] = useState<string | null>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
+  const [processLogs, setProcessLogs] = useState<string[]>([]);
+  const terminalScrollRef = useRef<ScrollView>(null);
 
   // Modals
   const [selectedShift, setSelectedShift] = useState<ShiftDbRow | null>(null);
@@ -90,6 +94,11 @@ export default function HomeScreen() {
 
   const showAlert = (title: string, message: string, type: AlertType = 'info') => {
     setAlertConfig({ visible: true, title, message, type });
+  };
+
+  const appendLog = (msg: string) => {
+    const time = new Date().toLocaleTimeString('en-US', { hour12: false });
+    setProcessLogs((prev) => [...prev, `[${time}] ${msg}`]);
   };
 
   const isAdmin = useMemo(() => {
@@ -175,14 +184,22 @@ export default function HomeScreen() {
     showAlert('Shift Updated', 'Your shift changes have been saved.', 'success');
   };
 
-  // Reusable processor for uploads and one-tap retries
+  // Reusable processor with live terminal console streaming
   const processRosterBase64 = async (base64: string) => {
     setUploadingRoster(true);
     setUploadError(null);
-    try {
-      const matrixData = await parseFullStoreRoster(base64);
-      await saveFullStoreRoster(matrixData);
+    setProcessLogs([`[${new Date().toLocaleTimeString('en-US', { hour12: false })}] Initializing roster processing...`]);
 
+    try {
+      appendLog('Dispatching image to AI OCR Agent...');
+      const matrixData = await parseFullStoreRoster(base64, (msg) => appendLog(msg));
+
+      appendLog(`AI response parsed: Week ${matrixData.week}, Store #${matrixData.store}`);
+      appendLog(`Extracted ${matrixData.rows.length} total staff entries.`);
+
+      await saveFullStoreRoster(matrixData, (msg) => appendLog(msg));
+
+      appendLog('Refreshing local views & directory...');
       const [updated, updatedWeeks, updatedEmps] = await Promise.all([
         fetchAllShifts(),
         fetchWeeklyHours(),
@@ -192,15 +209,16 @@ export default function HomeScreen() {
       setWeeklyList(updatedWeeks);
       setEmployees(updatedEmps);
 
-      // Successfully processed: clear cached image and error state
+      appendLog('Process finished cleanly.');
       setLastRosterBase64(null);
       setUploadError(null);
       setUploadingRoster(false);
 
       showAlert('Store Synced', `Processed entire roster for week of ${matrixData.week}.`, 'success');
     } catch (err: any) {
+      const errorMsg = err.message || 'Roster processing encountered an error.';
+      appendLog(`❌ ERROR: ${errorMsg}`);
       setUploadingRoster(false);
-      const errorMsg = err.message || 'Gemini service is currently busy.';
       setUploadError(errorMsg);
     }
   };
@@ -420,50 +438,76 @@ export default function HomeScreen() {
           onClose={() => setAlertConfig((prev) => ({ ...prev, visible: false }))}
         />
 
-        {/* Fullscreen OCR / AI Uploading & Retry Modal */}
+        {/* Fullscreen OCR / Terminal Console Modal */}
         <Modal visible={uploadingRoster || !!uploadError} transparent={true} animationType="fade">
           <View style={styles.fullscreenLoaderOverlay}>
             <View style={styles.loaderCard}>
-              {uploadingRoster ? (
-                <>
-                  <ActivityIndicator size="large" color="#2563eb" />
-                  <Text style={styles.loaderTitle}>Processing Store Roster</Text>
-                  <Text style={styles.loaderSub}>
-                    Extracting schedules and syncing relational data via Gemini AI...
-                  </Text>
-                </>
-              ) : (
-                <>
-                  <Text style={{ fontSize: 36, marginBottom: 6 }}>⚠️</Text>
-                  <Text style={styles.loaderTitle}>Processing Failed</Text>
-                  <Text style={styles.loaderSub}>
-                    {uploadError || 'Gemini servers are busy. Please try again.'}
-                  </Text>
+              <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 6 }}>
+                {uploadingRoster ? (
+                  <ActivityIndicator size="small" color="#2563eb" style={{ marginRight: 8 }} />
+                ) : uploadError ? (
+                  <Text style={{ fontSize: 18, marginRight: 8 }}>⚠️</Text>
+                ) : (
+                  <Text style={{ fontSize: 18, marginRight: 8 }}>✅</Text>
+                )}
+                <Text style={styles.loaderTitle}>
+                  {uploadingRoster ? 'Processing Store Roster' : uploadError ? 'Process Halted' : 'Finished'}
+                </Text>
+              </View>
 
-                  <View style={styles.modalActionRow}>
-                    <TouchableOpacity
-                      style={[styles.modalActionBtn, styles.modalCancelBtn]}
-                      onPress={() => {
-                        setUploadError(null);
-                        setLastRosterBase64(null);
-                      }}
+              {/* Terminal View */}
+              <View style={styles.terminalContainer}>
+                <View style={styles.terminalHeader}>
+                  <Text style={styles.terminalHeaderDot}>🔴 🟡 🟢</Text>
+                  <Text style={styles.terminalHeaderTitle}>sync-roster.log</Text>
+                </View>
+                <ScrollView
+                  style={styles.terminalScroll}
+                  ref={terminalScrollRef}
+                  onContentSizeChange={() => terminalScrollRef.current?.scrollToEnd({ animated: true })}
+                >
+                  {processLogs.map((item, idx) => (
+                    <Text
+                      key={idx}
+                      style={[
+                        styles.terminalText,
+                        item.includes('❌') || item.includes('error') || item.includes('Halted')
+                          ? { color: '#f87171' }
+                          : item.includes('⚠️')
+                          ? { color: '#fbbf24' }
+                          : item.includes('✓') || item.includes('🎉')
+                          ? { color: '#4ade80' }
+                          : { color: '#38bdf8' },
+                      ]}
                     >
-                      <Text style={styles.modalCancelBtnText}>Dismiss</Text>
-                    </TouchableOpacity>
+                      {item}
+                    </Text>
+                  ))}
+                </ScrollView>
+              </View>
 
-                    <TouchableOpacity
-                      style={[styles.modalActionBtn, styles.modalRetryBtn]}
-                      onPress={() => {
-                        if (lastRosterBase64) {
-                          processRosterBase64(lastRosterBase64);
-                        }
-                      }}
-                    >
-                      <Text style={styles.modalRetryBtnText}>🔄 Retry Now</Text>
-                    </TouchableOpacity>
-                  </View>
-                </>
-              )}
+              {/* Action Buttons */}
+              <View style={styles.modalActionRow}>
+                <TouchableOpacity
+                  style={[styles.modalActionBtn, styles.modalCancelBtn]}
+                  onPress={() => {
+                    setUploadError(null);
+                    setLastRosterBase64(null);
+                    setUploadingRoster(false);
+                  }}
+                >
+                  <Text style={styles.modalCancelBtnText}>{uploadingRoster ? 'Cancel' : 'Dismiss'}</Text>
+                </TouchableOpacity>
+
+                {uploadError && lastRosterBase64 && (
+                  <TouchableOpacity
+                    style={[styles.modalActionBtn, styles.modalRetryBtn]}
+                    onPress={() => processRosterBase64(lastRosterBase64)}
+                  >
+                    <Text style={styles.modalRetryBtnText}>🔄 Retry Now</Text>
+                  </TouchableOpacity>
+                )}
+              </View>
             </View>
           </View>
         </Modal>
@@ -542,23 +586,55 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(15, 23, 42, 0.75)',
     justifyContent: 'center',
     alignItems: 'center',
-    paddingHorizontal: 24,
+    paddingHorizontal: 18,
   },
   loaderCard: {
     backgroundColor: '#ffffff',
     borderRadius: 18,
-    padding: 24,
-    alignItems: 'center',
+    padding: 20,
     width: '100%',
-    maxWidth: 340,
+    maxWidth: 420,
     shadowColor: '#000',
     shadowOpacity: 0.15,
     shadowRadius: 12,
     elevation: 8,
   },
-  loaderTitle: { fontSize: 17, fontWeight: '800', color: '#0f172a', marginTop: 12 },
-  loaderSub: { fontSize: 13, color: '#64748b', textAlign: 'center', marginTop: 6, lineHeight: 18 },
-  modalActionRow: { flexDirection: 'row', gap: 10, width: '100%', marginTop: 20 },
+  loaderTitle: { fontSize: 17, fontWeight: '800', color: '#0f172a' },
+  terminalContainer: {
+    width: '100%',
+    backgroundColor: '#090d16',
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#1e293b',
+    overflow: 'hidden',
+    marginVertical: 12,
+    height: 230,
+  },
+  terminalHeader: {
+    backgroundColor: '#0f172a',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderBottomWidth: 1,
+    borderBottomColor: '#1e293b',
+  },
+  terminalHeaderDot: { fontSize: 9, letterSpacing: 2 },
+  terminalHeaderTitle: {
+    color: '#94a3b8',
+    fontSize: 11,
+    fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
+    marginLeft: 8,
+    fontWeight: '600',
+  },
+  terminalScroll: { flex: 1, padding: 10 },
+  terminalText: {
+    fontSize: 11,
+    lineHeight: 16,
+    fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
+    marginBottom: 4,
+  },
+  modalActionRow: { flexDirection: 'row', gap: 10, width: '100%', marginTop: 8 },
   modalActionBtn: {
     flex: 1,
     paddingVertical: 12,
