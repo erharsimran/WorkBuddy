@@ -11,8 +11,8 @@ export async function parseFullStoreRoster(imageBase64: string): Promise<RawRost
     const apiKey = process.env.EXPO_PUBLIC_GEMINI_API_KEY;
     if (!apiKey) throw new Error('Missing Gemini API Key.');
 
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key=${apiKey}`;
-
+    // Clean data URL prefix if present
+    const cleanBase64 = imageBase64.replace(/^data:image\/[a-z]+;base64,/, '');
 
     const prompt = `
 Transcribe this store schedule grid into flat rows.
@@ -40,30 +40,57 @@ Return ONLY valid JSON matching this exact structure:
                 role: 'user',
                 parts: [
                     { text: prompt },
-                    { inlineData: { mimeType: 'image/jpeg', data: imageBase64 } },
-                ],
-            },
-        ],
-        generationConfig: {
-            responseMimeType: 'application/json',
-            temperature: 0.1, // Low temperature for strict data extraction
-        },
-    };
+                  { inlineData: { mimeType: 'image/jpeg', data: cleanBase64 } },
+              ],
+          },
+      ],
+      generationConfig: {
+          responseMimeType: 'application/json',
+          temperature: 0.1,
+          maxOutputTokens: 4096,
+      },
+  };
 
-    const response = await fetch(url, {
+    // Uses gemini-3.8-flash as the active production model
+    const models = ['gemini-3.8-flash', 'gemini-3.6-flash'];
+
+    let lastErrorMessage = '';
+
+    for (const model of models) {
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+
+        try {
+        const response = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
-  });
+      });
 
-    if (!response.ok) {
+        if (!response.ok) {
         const errorData = await response.json().catch(() => ({}));
-        throw new Error(`Gemini Parsing Error: ${errorData.error?.message || response.statusText}`);
+          const msg = errorData.error?.message || response.statusText;
+
+          if (response.status === 503 || response.status === 429 || msg.toLowerCase().includes('demand')) {
+              console.warn(`[Gemini] ${model} overloaded. Retrying next available model...`);
+              lastErrorMessage = msg;
+              continue;
+          }
+
+          throw new Error(`Gemini Parsing Error: ${msg}`);
+      }
+
+        const result = await response.json();
+        const rawText = result.candidates?.[0]?.content?.parts?.[0]?.text;
+        if (!rawText) throw new Error('No roster data found.');
+
+        return JSON.parse(rawText) as RawRosterMatrix;
+        } catch (err: any) {
+            if (err.message && !err.message.includes('overloaded') && !err.message.includes('demand')) {
+                throw err;
+            }
+            lastErrorMessage = err.message;
+        }
     }
 
-    const result = await response.json();
-    const rawText = result.candidates?.[0]?.content?.parts?.[0]?.text;
-    if (!rawText) throw new Error('No roster data found.');
-
-    return JSON.parse(rawText) as RawRosterMatrix;
+    throw new Error(`Gemini servers are busy: ${lastErrorMessage}. Please try again in a few moments.`);
 }

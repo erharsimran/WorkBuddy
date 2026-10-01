@@ -57,6 +57,10 @@ export default function HomeScreen() {
   const [hourlyRate, setHourlyRate] = useState<number>(18.10);
   const [uploadingRoster, setUploadingRoster] = useState<boolean>(false);
 
+  // Retry state for roster uploads
+  const [lastRosterBase64, setLastRosterBase64] = useState<string | null>(null);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+
   // Modals
   const [selectedShift, setSelectedShift] = useState<ShiftDbRow | null>(null);
   const [editingShift, setEditingShift] = useState<ShiftDbRow | null>(null);
@@ -171,6 +175,36 @@ export default function HomeScreen() {
     showAlert('Shift Updated', 'Your shift changes have been saved.', 'success');
   };
 
+  // Reusable processor for uploads and one-tap retries
+  const processRosterBase64 = async (base64: string) => {
+    setUploadingRoster(true);
+    setUploadError(null);
+    try {
+      const matrixData = await parseFullStoreRoster(base64);
+      await saveFullStoreRoster(matrixData);
+
+      const [updated, updatedWeeks, updatedEmps] = await Promise.all([
+        fetchAllShifts(),
+        fetchWeeklyHours(),
+        fetchStoreEmployees(),
+      ]);
+      setShifts(updated);
+      setWeeklyList(updatedWeeks);
+      setEmployees(updatedEmps);
+
+      // Successfully processed: clear cached image and error state
+      setLastRosterBase64(null);
+      setUploadError(null);
+      setUploadingRoster(false);
+
+      showAlert('Store Synced', `Processed entire roster for week of ${matrixData.week}.`, 'success');
+    } catch (err: any) {
+      setUploadingRoster(false);
+      const errorMsg = err.message || 'Gemini service is currently busy.';
+      setUploadError(errorMsg);
+    }
+  };
+
   const handleAdminUploadSchedule = async () => {
     if (!isAdmin) return;
     const result = await ImagePicker.launchImageLibraryAsync({
@@ -180,28 +214,18 @@ export default function HomeScreen() {
     });
     if (result.canceled || !result.assets[0]?.base64) return;
 
-    setUploadingRoster(true);
-    try {
-      const matrixData = await parseFullStoreRoster(result.assets[0].base64);
-      await saveFullStoreRoster(matrixData);
-      const [updated, updatedWeeks, updatedEmps] = await Promise.all([
-        fetchAllShifts(),
-        fetchWeeklyHours(),
-        fetchStoreEmployees(),
-      ]);
-      setShifts(updated);
-      setWeeklyList(updatedWeeks);
-      setEmployees(updatedEmps);
-      showAlert('Store Synced', `Processed entire roster for week of ${matrixData.week}.`, 'success');
-    } catch (err: any) {
-      showAlert('Processing Error', err.message || 'Failed to process store roster.', 'error');
-    } finally {
-      setUploadingRoster(false);
-    }
+    const base64 = result.assets[0].base64;
+    setLastRosterBase64(base64);
+    await processRosterBase64(base64);
   };
-const handleManualArchiveShifts = async () => {
+
+  const handleRetryRoster = async () => {
+    if (!lastRosterBase64) return;
+    await processRosterBase64(lastRosterBase64);
+  };
+
+  const handleManualArchiveShifts = async () => {
     try {
-      // Determine domain: fallback to live production URL when running on mobile/local
       const baseUrl =
         typeof window !== 'undefined' && window.location.origin.includes('vercel.app')
           ? window.location.origin
@@ -211,7 +235,6 @@ const handleManualArchiveShifts = async () => {
       const data = await response.json();
 
       if (data.success) {
-        // Refresh local shifts after purge
         const [refreshedShifts, refreshedWeeks] = await Promise.all([
           fetchAllShifts(),
           fetchWeeklyHours(),
@@ -231,6 +254,7 @@ const handleManualArchiveShifts = async () => {
       showAlert('Network Error', err.message || 'Unable to connect to archive service.', 'error');
     }
   };
+
   const handleSaveEmp = async (id: number, details: Partial<EmployeeRecord>) => {
     try {
       await updateStoreEmployee(id, {
@@ -277,7 +301,6 @@ const handleManualArchiveShifts = async () => {
     );
   }
 
-  // Separate Login Screen
   if (!currentUser) {
     return <LoginScreen onLoginSuccess={handleLoginSuccess} />;
   }
@@ -329,20 +352,26 @@ const handleManualArchiveShifts = async () => {
           <AdminTab
             employees={employees}
             onUploadRoster={handleAdminUploadSchedule}
+            onRetryRoster={handleRetryRoster}
+            lastUploadError={uploadError}
+            isUploadingRoster={uploadingRoster}
+            hasCachedRosterImage={!!lastRosterBase64}
             onViewSchedule={(emp) => setInspectedEmp(emp)}
             onSaveEmployee={handleSaveEmp}
             onDeleteEmployee={handleDeleteEmp}
             onArchiveShifts={handleManualArchiveShifts}
           />
         )}
-       {activeTab === 'marketplace' && (
-        <MarketplaceTab
-          currentUser={currentUser}
-          isAdmin={isAdmin}
-          myShifts={shifts} // Your existing Shift[] array for the active user
-          onShowAlert={showAlert}
-        />
-      )}
+
+        {activeTab === 'marketplace' && (
+          <MarketplaceTab
+            currentUser={currentUser}
+            isAdmin={isAdmin}
+            myShifts={shifts}
+            onShowAlert={showAlert}
+          />
+        )}
+
         {/* Modals */}
         <CoworkersModal shift={selectedShift} onClose={() => setSelectedShift(null)} />
 
@@ -391,15 +420,50 @@ const handleManualArchiveShifts = async () => {
           onClose={() => setAlertConfig((prev) => ({ ...prev, visible: false }))}
         />
 
-        {/* Fullscreen OCR / AI Uploading Overlay */}
-        <Modal visible={uploadingRoster} transparent={true} animationType="fade">
+        {/* Fullscreen OCR / AI Uploading & Retry Modal */}
+        <Modal visible={uploadingRoster || !!uploadError} transparent={true} animationType="fade">
           <View style={styles.fullscreenLoaderOverlay}>
             <View style={styles.loaderCard}>
-              <ActivityIndicator size="large" color="#2563eb" />
-              <Text style={styles.loaderTitle}>Processing Store Roster</Text>
-              <Text style={styles.loaderSub}>
-                Extracting schedules and syncing relational data via Gemini AI...
-              </Text>
+              {uploadingRoster ? (
+                <>
+                  <ActivityIndicator size="large" color="#2563eb" />
+                  <Text style={styles.loaderTitle}>Processing Store Roster</Text>
+                  <Text style={styles.loaderSub}>
+                    Extracting schedules and syncing relational data via Gemini AI...
+                  </Text>
+                </>
+              ) : (
+                <>
+                  <Text style={{ fontSize: 36, marginBottom: 6 }}>⚠️</Text>
+                  <Text style={styles.loaderTitle}>Processing Failed</Text>
+                  <Text style={styles.loaderSub}>
+                    {uploadError || 'Gemini servers are busy. Please try again.'}
+                  </Text>
+
+                  <View style={styles.modalActionRow}>
+                    <TouchableOpacity
+                      style={[styles.modalActionBtn, styles.modalCancelBtn]}
+                      onPress={() => {
+                        setUploadError(null);
+                        setLastRosterBase64(null);
+                      }}
+                    >
+                      <Text style={styles.modalCancelBtnText}>Dismiss</Text>
+                    </TouchableOpacity>
+
+                    <TouchableOpacity
+                      style={[styles.modalActionBtn, styles.modalRetryBtn]}
+                      onPress={() => {
+                        if (lastRosterBase64) {
+                          processRosterBase64(lastRosterBase64);
+                        }
+                      }}
+                    >
+                      <Text style={styles.modalRetryBtnText}>🔄 Retry Now</Text>
+                    </TouchableOpacity>
+                  </View>
+                </>
+              )}
             </View>
           </View>
         </Modal>
@@ -483,7 +547,7 @@ const styles = StyleSheet.create({
   loaderCard: {
     backgroundColor: '#ffffff',
     borderRadius: 18,
-    padding: 28,
+    padding: 24,
     alignItems: 'center',
     width: '100%',
     maxWidth: 340,
@@ -492,8 +556,20 @@ const styles = StyleSheet.create({
     shadowRadius: 12,
     elevation: 8,
   },
-  loaderTitle: { fontSize: 17, fontWeight: '800', color: '#0f172a', marginTop: 16 },
+  loaderTitle: { fontSize: 17, fontWeight: '800', color: '#0f172a', marginTop: 12 },
   loaderSub: { fontSize: 13, color: '#64748b', textAlign: 'center', marginTop: 6, lineHeight: 18 },
+  modalActionRow: { flexDirection: 'row', gap: 10, width: '100%', marginTop: 20 },
+  modalActionBtn: {
+    flex: 1,
+    paddingVertical: 12,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  modalCancelBtn: { backgroundColor: '#f1f5f9' },
+  modalCancelBtnText: { color: '#475569', fontWeight: '700', fontSize: 13 },
+  modalRetryBtn: { backgroundColor: '#2563eb' },
+  modalRetryBtnText: { color: '#ffffff', fontWeight: '700', fontSize: 13 },
   bottomTabBar: {
     flexDirection: 'row',
     backgroundColor: '#ffffff',

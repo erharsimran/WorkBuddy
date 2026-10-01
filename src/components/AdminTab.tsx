@@ -25,6 +25,10 @@ export interface EmployeeRecord {
 interface Props {
   employees: EmployeeRecord[];
   onUploadRoster: () => void;
+  onRetryRoster?: () => void; // Called to retry the last uploaded image
+  lastUploadError?: string | null; // Pass error message when parsing fails
+  isUploadingRoster?: boolean; // Spinner state while processing
+  hasCachedRosterImage?: boolean; // True if an image is in memory ready to be retried
   onViewSchedule: (emp: EmployeeRecord) => void;
   onSaveEmployee: (id: number, details: Partial<EmployeeRecord>) => Promise<void>;
   onDeleteEmployee: (id: number, name: string) => Promise<void>;
@@ -34,6 +38,10 @@ interface Props {
 export const AdminTab: React.FC<Props> = ({
   employees,
   onUploadRoster,
+  onRetryRoster,
+  lastUploadError,
+  isUploadingRoster = false,
+  hasCachedRosterImage = false,
   onViewSchedule,
   onSaveEmployee,
   onDeleteEmployee,
@@ -115,9 +123,32 @@ export const AdminTab: React.FC<Props> = ({
           Upload the Dollarama store roster image to scan and update shifts for all staff.
         </Text>
 
-        <TouchableOpacity style={styles.uploadButton} onPress={onUploadRoster}>
-          <Text style={styles.uploadButtonText}>🖼️ Upload & Process Roster</Text>
+        <TouchableOpacity
+          style={[styles.uploadButton, isUploadingRoster && styles.buttonDisabled]}
+          onPress={onUploadRoster}
+          disabled={isUploadingRoster}
+        >
+          {isUploadingRoster ? (
+            <View style={styles.loadingRow}>
+              <ActivityIndicator color="#ffffff" style={{ marginRight: 8 }} />
+              <Text style={styles.uploadButtonText}>Scanning with Gemini...</Text>
+            </View>
+          ) : (
+            <Text style={styles.uploadButtonText}>🖼️ Upload & Process Roster</Text>
+          )}
         </TouchableOpacity>
+
+        {/* Retry Banner & Button (Triggers if an error occurred or an image is cached) */}
+        {(lastUploadError || hasCachedRosterImage) && onRetryRoster && !isUploadingRoster && (
+          <View style={styles.retryBox}>
+            {lastUploadError ? (
+              <Text style={styles.errorNoticeText}>⚠️ {lastUploadError}</Text>
+            ) : null}
+            <TouchableOpacity style={styles.retryButton} onPress={onRetryRoster}>
+              <Text style={styles.retryButtonText}>🔄 Retry Last Roster Image</Text>
+            </TouchableOpacity>
+          </View>
+        )}
       </View>
 
       {/* Weekly Shift Archive & Cleanup Card */}
@@ -223,7 +254,13 @@ const styles = StyleSheet.create({
   adminCardTitle: { fontSize: 16, fontWeight: '800', color: '#0f172a' },
   adminCardSub: { fontSize: 13, color: '#64748b', marginTop: 4, lineHeight: 18 },
   uploadButton: { backgroundColor: '#2563eb', paddingVertical: 14, borderRadius: 12, alignItems: 'center', marginTop: 12 },
+  buttonDisabled: { opacity: 0.65 },
   uploadButtonText: { color: '#ffffff', fontSize: 14, fontWeight: '700' },
+  loadingRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center' },
+  retryBox: { marginTop: 12, paddingTop: 12, borderTopWidth: 1, borderTopColor: '#f1f5f9' },
+  errorNoticeText: { color: '#dc2626', fontSize: 13, fontWeight: '600', marginBottom: 8, lineHeight: 18 },
+  retryButton: { backgroundColor: '#fef2f2', borderWidth: 1, borderColor: '#fca5a5', paddingVertical: 12, borderRadius: 10, alignItems: 'center' },
+  retryButtonText: { color: '#b91c1c', fontSize: 13, fontWeight: '700' },
   archiveButton: { backgroundColor: '#fef3c7', borderWidth: 1, borderColor: '#fde68a', paddingVertical: 14, borderRadius: 12, alignItems: 'center', marginTop: 12 },
   archiveButtonText: { color: '#92400e', fontSize: 14, fontWeight: '700' },
   empCard: { backgroundColor: '#ffffff', padding: 14, borderRadius: 12, marginBottom: 10, borderWidth: 1, borderColor: '#e2e8f0', flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },

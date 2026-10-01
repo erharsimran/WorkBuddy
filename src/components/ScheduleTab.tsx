@@ -126,7 +126,7 @@ export const ScheduleTab: React.FC<Props> = ({ shifts, currentUser, onSelectShif
 const styles = StyleSheet.create({
   container: { flex: 1 },
   actionButtonRow: { flexDirection: 'row', gap: 10, marginTop: 4 },
-  reminderButton: { flex: 1, backgroundColor: '#7c3aed', paddingVertical: 14, borderRadius: 12, alignItems: 'center' },
+  reminderButton: { flex: 1, backgroundColor: '#36800f', paddingVertical: 14, borderRadius: 12, alignItems: 'center' },
   actionButtonText: { color: '#ffffff', fontSize: 14, fontWeight: '700' },
   subtitle: { fontSize: 18, fontWeight: '700', color: '#1e293b', marginTop: 16, marginBottom: 12 },
   card: { backgroundColor: '#ffffff', padding: 14, borderRadius: 14, marginBottom: 10, borderWidth: 1, borderColor: '#e2e8f0' },
